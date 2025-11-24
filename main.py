@@ -14,6 +14,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
 logging.getLogger("chromadb").setLevel(logging.WARNING)
+logging.getLogger("faster_whisper").setLevel(logging.WARNING)
 # 只保留服务的日志
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 

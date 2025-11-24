@@ -9,13 +9,11 @@ from collections import deque
 from typing import Any, cast
 import numpy as np
 import torch
-import httpx
 import pvporcupine
 import pyaudio
 import pygame
 import edge_tts
-import speech_recognition as sr
-from openai import OpenAI
+from faster_whisper import WhisperModel
 from config import Config
 
 class AudioHandler:
@@ -31,12 +29,15 @@ class AudioHandler:
         except Exception as e:
             print(f"[Audio Error] Pygame init failed: {e}")
 
-        self._http_client = httpx.Client()
-        self.groq_client = OpenAI(
-            api_key=Config.GROQ_API_KEY, 
-            base_url="https://api.groq.com/openai/v1",
-            http_client=self._http_client
-        )
+        # 初始化 Faster-Whisper (本地 GPU)
+        try:
+            # 使用 large-v3 或 medium，根据显存决定
+            # compute_type="float16" 利用 GPU 加速
+            self.stt_model = WhisperModel("medium", device="cuda", compute_type="float16")
+            print("[Init] Faster-Whisper (GPU) Loaded.")
+        except Exception as e:
+            print(f"[Init Error] Faster-Whisper Load Failed: {e}")
+            self.stt_model = None
         
         # 加载 Silero VAD 模型
         try:
@@ -202,11 +203,12 @@ class AudioHandler:
                 fname = tmp.name
             
             print("[系统]: 正在转录...", flush=True)
-            with open(fname, "rb") as f:
-                transcription = self.groq_client.audio.transcriptions.create(
-                    model="whisper-large-v3", file=f, language="zh"
-                )
-            text = transcription.text
+            if self.stt_model:
+                segments, info = self.stt_model.transcribe(fname, language="zh", beam_size=5)
+                # segments 是一个生成器，需要遍历拼接
+                text = "".join([segment.text for segment in segments])
+            else:
+                print("[Error] STT model not initialized.")
         except Exception as e:
             print(f"[Transcribe Error]: {e}")
         finally:
@@ -217,9 +219,6 @@ class AudioHandler:
         return text
 
     def close(self):
-        if hasattr(self, '_http_client') and self._http_client:
-            try: self._http_client.close()
-            except: pass
         try:
             pygame.mixer.music.stop()
             pygame.mixer.quit()
