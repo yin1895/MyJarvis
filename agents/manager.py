@@ -47,7 +47,16 @@ class ManagerAgent(BaseAgent):
             self.history = self.history[-self.max_history * 2:]
 
     def _identify_intent(self, user_input: str) -> dict:
-        # 【关键修复】在此处补充了 learn 和 query_knowledge 意图
+        # 1. 获取上下文 (最近一条 Assistant 回复)
+        context_msg = "无"
+        if self.history:
+            # 倒序查找最近的一条 assistant 消息
+            for msg in reversed(self.history):
+                if msg["role"] == "assistant":
+                    context_msg = msg["content"]
+                    break
+
+        # 2. 构建 Prompt
         prompt = [
             {"role": "system", "content": """
 你是一个意图识别引擎。请分析用户的输入，返回 JSON 格式的意图。
@@ -66,13 +75,16 @@ class ManagerAgent(BaseAgent):
 - "time": 询问当前时间。
 - "chat": 普通闲聊。
 
+【重要】请结合上下文 (Context) 判断意图。
+例如：如果上下文是询问是否运行某命令，而用户回答“好的/运行”，请务必返回对应的 intent (如 shell) 和上下文中的 param。
+
 返回格式示例：
 {"intent": "search", "param": "北京天气"}
 {"intent": "schedule", "param": "10分钟后提醒我喝水"}
 {"intent": "learn", "param": "README.md"}
 {"intent": "query_knowledge", "param": "项目核心模块有哪些"}
 """},
-            {"role": "user", "content": user_input}
+            {"role": "user", "content": f"Context: {context_msg}\nUser Input: {user_input}"}
         ]
         
         try:
