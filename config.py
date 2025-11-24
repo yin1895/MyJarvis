@@ -40,6 +40,27 @@ class Config:
     except Exception:
         WAKE_SENSITIVITY = 0.8
 
+    # 模型预设配置
+    MODEL_PRESETS = {
+        "default": {
+            "api_key": os.getenv("LLM_API_KEY"),
+            "base_url": os.getenv("LLM_BASE_URL"),
+            "model": os.getenv("LLM_MODEL")
+        },
+        # Google Gemini (视觉/长文本强项)
+        "gemini": {
+            "api_key": os.getenv("GOOGLE_API_KEY"),
+            "base_url": os.getenv("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
+            "model": os.getenv("VISION_MODEL", "gemini-1.5-flash")
+        },
+        # 本地 Ollama (隐私/离线)
+        "local": {
+            "api_key": "ollama",
+            "base_url": "http://localhost:11434/v1",
+            "model": "llama3" # 或 user 指定的其他本地模型
+        }
+    }
+
     @staticmethod
     def get_proxy_config():
         """获取 httpx 兼容的代理配置字典"""

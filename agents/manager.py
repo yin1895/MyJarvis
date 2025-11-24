@@ -10,6 +10,7 @@ from agents.vision_agent import VisionAgent
 from agents.file_agent import FileAgent
 from agents.shell_agent import ShellAgent
 from agents.python_agent import PythonAgent
+from agents.web_surfer_agent import WebSurferAgent
 from services.memory_service import MemoryService
 from services.knowledge_service import KnowledgeService
 import tools
@@ -25,6 +26,7 @@ class ManagerAgent(BaseAgent):
         self.file_agent = FileAgent()
         self.shell_agent = ShellAgent()
         self.python_agent = PythonAgent()
+        self.web_surfer = WebSurferAgent()
         # 初始化服务
         self.memory = MemoryService()
         self.knowledge_service = KnowledgeService()
@@ -61,32 +63,48 @@ class ManagerAgent(BaseAgent):
         # 2. 构建 Prompt
         prompt = [
             {"role": "system", "content": """
-你是一个意图识别引擎。请分析用户的输入，返回 JSON 格式的意图。
+你是一个智能意图决策中枢。请先进行【思考】，分析用户需求最适合哪个工具，然后输出 JSON。
 
-可选意图 (intent): 
-- "search": 联网查询新闻、天气、汇率、百科等实时信息。
-- "open_app": 打开电脑上的软件。
-- "system_control": 系统控制（音量、亮度、媒体播放、关机锁屏）。
-- "vision": 视觉分析（看屏幕、截图、分析图片）。
-- "file_io": 文件操作（读取单个文件内容、写入/创建文件、列出目录结构）。注意：不包含删除或批量修改。
-- "shell": 终端命令（执行命令、运行、终端、git提交、pip安装、ping一下、系统信息）。
-- "python_task": Python代码任务（计算、分析数据、生成图表、处理图片、批量重命名、删除文件、清空目录、用代码解决）。
-- "schedule": 定时提醒（提醒我、闹钟、倒计时、几点叫我）。
-- "remember": 记忆更新（记住我叫什么、我喜欢什么、记录备忘）。
-- "learn": 知识库学习（学习文档、记一下这个文件、把xx加入知识库）。
-- "query_knowledge": 知识库检索（根据文档回答、查询知识库、怎么解决报错、项目架构是怎样的）。
-- "time": 询问当前时间。
-- "chat": 普通闲聊。
+### 核心工具定义 (边界严格区分)
+1. **python_task**: 【最高优先级】复杂逻辑、数据处理、批量文件操作、画图、计算、未知任务的自动化。
+   - *例子*: "把所有jpg转png", "分析excel", "画个正弦图", "清空workspace目录".
+2. **shell**: 【系统级操作】Git操作、安装依赖、系统状态、Ping、运行脚本。
+   - *例子*: "git status", "pip install pandas", "运行 python script.py".
+3. **file_io**: 【仅限单文件读取/查看】绝对不做修改/删除操作。
+   - *例子*: "读一下 main.py", "看看当前目录下有什么文件".
+4. **search**: 需要联网获取实时信息。
+5. **query_knowledge**: 询问关于项目代码库的问题、报错解决方案、文档内容 (RAG)。
+   - *例子*: "ManagerAgent是怎么实现的?", "根据文档解释架构".
+6. **schedule**: 包含具体时间的提醒。
+7. **switch_model**: 切换底层 LLM 模型。
+   - *例子*: "切换到 gemini", "用本地模型", "换回默认模型".
+8. **chat**: 纯闲聊，不涉及操作。
 
-【重要】请结合上下文 (Context) 判断意图。
-例如：如果上下文是询问是否运行某命令，而用户回答“好的/运行”，请务必返回对应的 intent (如 shell) 和上下文中的 param。
-
-返回格式示例：
-{"intent": "search", "param": "北京天气"}
-{"intent": "schedule", "param": "10分钟后提醒我喝水"}
-{"intent": "learn", "param": "README.md"}
-{"intent": "query_knowledge", "param": "项目核心模块有哪些"}
+### 输出格式 (JSON)
+{
+    "thought": "用户的意图是... 涉及到... 应该使用...",
+    "intent": "python_task",
+    "param": "..."
+}
 """},
+            {"role": "user", "content": "用户: \"帮我把 data 目录清空\""},
+            {"role": "assistant", "content": """{
+    "thought": "这是批量删除操作，file_io 做不到，shell 有风险，用 python 沙箱最安全。",
+    "intent": "python_task",
+    "param": "清空 data 目录"
+}"""},
+            {"role": "user", "content": "用户: \"提交代码\""},
+            {"role": "assistant", "content": """{
+    "thought": "这是 Git 操作，属于系统级命令。",
+    "intent": "shell",
+    "param": "git add . && git commit -m 'update'"
+}"""},
+            {"role": "user", "content": "用户: \"读一下 README.md\""},
+            {"role": "assistant", "content": """{
+    "thought": "这是读取单个文件内容。",
+    "intent": "file_io",
+    "param": "read README.md"
+}"""},
             {"role": "user", "content": f"Context: {context_msg}\nUser Input: {user_input}"}
         ]
         
@@ -94,7 +112,12 @@ class ManagerAgent(BaseAgent):
             response = self._call_llm(prompt, temperature=0.1)
             # 清理可能存在的 markdown 标记
             clean_json = response.replace("```json", "").replace("```", "").strip()
-            return json.loads(clean_json)
+            data = json.loads(clean_json)
+            
+            if "thought" in data:
+                print(f"[Manager 思考]: {data['thought']}")
+                
+            return data
         except:
             return {"intent": "chat", "param": ""}
 
@@ -169,6 +192,9 @@ class ManagerAgent(BaseAgent):
         elif intent == "python_task":
             tool_output = self.python_agent.run(param)
         
+        elif intent == "browse_task":
+            tool_output = self.web_surfer.run(param)
+        
         elif intent == "schedule":
             if self.scheduler:
                 # 简单的时间提取逻辑
@@ -222,6 +248,30 @@ class ManagerAgent(BaseAgent):
                 tool_output = "检索到的参考资料（请基于此回答）：\n" + "\n---\n".join(docs)
             else:
                 tool_output = "知识库中没有找到相关内容，请尝试联网搜索。"
+
+        elif intent == "switch_model":
+            # 提取目标模式名称
+            target_model = param.lower()
+            if "gemini" in target_model: target_model = "gemini"
+            elif "local" in target_model or "本地" in target_model: target_model = "local"
+            elif "default" in target_model or "默认" in target_model: target_model = "default"
+            
+            # 自身切换
+            success = self.update_model_config(target_model)
+            
+            if success:
+                # 级联切换所有子 Agent
+                sub_agents = [
+                    self.search_agent, self.system_agent, self.vision_agent,
+                    self.file_agent, self.shell_agent, self.python_agent,
+                    self.web_surfer
+                ]
+                for agent in sub_agents:
+                    if hasattr(agent, 'update_model_config'):
+                        agent.update_model_config(target_model)
+                tool_output = f"已成功切换至 {target_model} 模式。"
+            else:
+                tool_output = f"切换失败：未找到模式 {target_model}。"
         
         # 4. 构建最终 Prompt
         # 实时获取最新的 System Prompt (包含动态记忆)
@@ -251,3 +301,4 @@ class ManagerAgent(BaseAgent):
         if hasattr(self.file_agent, 'close'): self.file_agent.close()
         if hasattr(self.shell_agent, 'close'): self.shell_agent.close()
         if hasattr(self.python_agent, 'close'): self.python_agent.close()
+        if hasattr(self.web_surfer, 'close'): self.web_surfer.close()
