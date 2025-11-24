@@ -38,3 +38,5 @@ desktop.ini
 # 临时/备份文件
 *.bak
 core.old.py
+
+/workspace

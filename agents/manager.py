@@ -9,6 +9,7 @@ from agents.system_agent import SystemAgent
 from agents.vision_agent import VisionAgent
 from agents.file_agent import FileAgent
 from agents.shell_agent import ShellAgent
+from agents.python_agent import PythonAgent
 from services.memory_service import MemoryService
 from services.knowledge_service import KnowledgeService
 import tools
@@ -23,6 +24,7 @@ class ManagerAgent(BaseAgent):
         self.vision_agent = VisionAgent()
         self.file_agent = FileAgent()
         self.shell_agent = ShellAgent()
+        self.python_agent = PythonAgent()
         # 初始化服务
         self.memory = MemoryService()
         self.knowledge_service = KnowledgeService()
@@ -66,8 +68,9 @@ class ManagerAgent(BaseAgent):
 - "open_app": 打开电脑上的软件。
 - "system_control": 系统控制（音量、亮度、媒体播放、关机锁屏）。
 - "vision": 视觉分析（看屏幕、截图、分析图片）。
-- "file_io": 文件操作（读取、写入、列出目录、查看文件）。
+- "file_io": 文件操作（读取单个文件内容、写入/创建文件、列出目录结构）。注意：不包含删除或批量修改。
 - "shell": 终端命令（执行命令、运行、终端、git提交、pip安装、ping一下、系统信息）。
+- "python_task": Python代码任务（计算、分析数据、生成图表、处理图片、批量重命名、删除文件、清空目录、用代码解决）。
 - "schedule": 定时提醒（提醒我、闹钟、倒计时、几点叫我）。
 - "remember": 记忆更新（记住我叫什么、我喜欢什么、记录备忘）。
 - "learn": 知识库学习（学习文档、记一下这个文件、把xx加入知识库）。
@@ -163,6 +166,9 @@ class ManagerAgent(BaseAgent):
         elif intent == "shell":
             tool_output = self.shell_agent.run(param)
         
+        elif intent == "python_task":
+            tool_output = self.python_agent.run(param)
+        
         elif intent == "schedule":
             if self.scheduler:
                 # 简单的时间提取逻辑
@@ -244,3 +250,4 @@ class ManagerAgent(BaseAgent):
         if hasattr(self.vision_agent, 'close'): self.vision_agent.close()
         if hasattr(self.file_agent, 'close'): self.file_agent.close()
         if hasattr(self.shell_agent, 'close'): self.shell_agent.close()
+        if hasattr(self.python_agent, 'close'): self.python_agent.close()
