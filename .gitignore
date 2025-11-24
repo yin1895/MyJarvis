@@ -1,0 +1,40 @@
+# 核心安全
+# 环境变量与密钥
+.env
+
+# Python 编译与缓存
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 本地数据与状态 (RAG与记忆)
+# 向量数据库、用户画像、日志
+data/
+*.log
+
+# 运行时产生的媒体文件
+*.mp3
+*.wav
+# Edge-TTS 生成的回复文件
+reply.mp3
+temp_*.wav
+
+# IDE / 编辑器配置
+.vscode/
+.idea/
+*.swp
+
+# 操作系统文件
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# 临时/备份文件
+*.bak
+core.old.py
