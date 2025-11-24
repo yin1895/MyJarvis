@@ -8,6 +8,7 @@ from agents.search_agent import SearchAgent
 from agents.system_agent import SystemAgent
 from agents.vision_agent import VisionAgent
 from agents.file_agent import FileAgent
+from agents.shell_agent import ShellAgent
 from services.memory_service import MemoryService
 from services.knowledge_service import KnowledgeService
 import tools
@@ -21,6 +22,7 @@ class ManagerAgent(BaseAgent):
         self.system_agent = SystemAgent()
         self.vision_agent = VisionAgent()
         self.file_agent = FileAgent()
+        self.shell_agent = ShellAgent()
         # 初始化服务
         self.memory = MemoryService()
         self.knowledge_service = KnowledgeService()
@@ -56,6 +58,7 @@ class ManagerAgent(BaseAgent):
 - "system_control": 系统控制（音量、亮度、媒体播放、关机锁屏）。
 - "vision": 视觉分析（看屏幕、截图、分析图片）。
 - "file_io": 文件操作（读取、写入、列出目录、查看文件）。
+- "shell": 终端命令（执行命令、运行、终端、git提交、pip安装、ping一下、系统信息）。
 - "schedule": 定时提醒（提醒我、闹钟、倒计时、几点叫我）。
 - "remember": 记忆更新（记住我叫什么、我喜欢什么、记录备忘）。
 - "learn": 知识库学习（学习文档、记一下这个文件、把xx加入知识库）。
@@ -145,6 +148,9 @@ class ManagerAgent(BaseAgent):
         elif intent == "file_io":
             tool_output = self.file_agent.run(param)
         
+        elif intent == "shell":
+            tool_output = self.shell_agent.run(param)
+        
         elif intent == "schedule":
             if self.scheduler:
                 # 简单的时间提取逻辑
@@ -225,3 +231,4 @@ class ManagerAgent(BaseAgent):
         if hasattr(self.system_agent, 'close'): self.system_agent.close()
         if hasattr(self.vision_agent, 'close'): self.vision_agent.close()
         if hasattr(self.file_agent, 'close'): self.file_agent.close()
+        if hasattr(self.shell_agent, 'close'): self.shell_agent.close()
