@@ -55,7 +55,7 @@ def main():
     # --- 启动画面 ---
     mode_str = "文字模式" if args.text else "语音模式"
     banner = Panel(
-        f"[bold white]Jarvis AI Assistant[/bold white]\\n[dim]Version 2.0 | {mode_str}[/dim]",
+        f"[bold white]Jarvis AI Assistant[/bold white]\n[dim]Version 2.0 | {mode_str}[/dim]",
         title="System Online",
         border_style="blue",
         expand=False
@@ -95,7 +95,7 @@ def main():
             while True:
                 try:
                     # 1. 获取键盘输入
-                    console.print("\\n[user][主人]: [/user]", end="")
+                    console.print("\n[user][主人]: [/user]", end="")
                     user_text = input().strip()
                     
                     if not user_text: continue
@@ -161,7 +161,7 @@ def main():
                     wake_word.stop()
 
     except KeyboardInterrupt:
-        console.print("\\n[danger]系统正在退出...[/danger]")
+        console.print("\n[danger]系统正在退出...[/danger]")
     finally:
         # 清理资源
         with console.status("[info]正在清理资源...[/info]", spinner="dots"):

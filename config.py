@@ -44,12 +44,62 @@ class Config:
         }
     }
 
-    # --- Agent 路由映射 ---
+    # --- Agent 路由映射 (Legacy - 兼容旧代码) ---
     # 未在此列出的 Agent 默认使用 "default"
     AGENT_MODEL_MAP = {
         "PythonAgent": "smart",
         "VisionAgent": "vision",
         "WebSurferAgent": "vision"
+    }
+
+    # === LLM 角色配置 (Jarvis V6.1 - 多 LLM 架构) ===
+    # 支持的 provider: "openai", "ollama", "gemini"
+    # 
+    # Ollama 配置示例 (本地模型):
+    #   "coder": {"provider": "ollama", "model": "deepseek-coder:6.7b"}
+    #   "fast": {"provider": "ollama", "model": "llama3:8b"}
+    #
+    # 如果 Ollama 不可用，自动回退到 'default'
+    LLM_ROLES = {
+        "default": {
+            "provider": "openai",
+            "api_key": os.getenv("DEFAULT_LLM_API_KEY"),
+            "base_url": os.getenv("DEFAULT_LLM_BASE_URL", "https://api.openai.com/v1"),
+            "model": os.getenv("DEFAULT_LLM_MODEL", "gpt-3.5-turbo"),
+        },
+        "smart": {
+            "provider": "openai",
+            "api_key": os.getenv("SMART_LLM_API_KEY") or os.getenv("DEFAULT_LLM_API_KEY"),
+            "base_url": os.getenv("SMART_LLM_BASE_URL") or os.getenv("DEFAULT_LLM_BASE_URL"),
+            "model": os.getenv("SMART_LLM_MODEL", "gpt-4o"),
+        },
+        "coder": {
+            # 优先使用 Ollama 本地 DeepSeek-Coder，不可用时回退到 default
+            "provider": os.getenv("CODER_LLM_PROVIDER", "ollama"),
+            "model": os.getenv("CODER_LLM_MODEL", "deepseek-coder:6.7b"),
+            "host": os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+            "timeout": 180,
+            # OpenAI fallback config (used if provider=openai or ollama unavailable)
+            "api_key": os.getenv("CODER_LLM_API_KEY") or os.getenv("DEFAULT_LLM_API_KEY"),
+            "base_url": os.getenv("CODER_LLM_BASE_URL") or os.getenv("DEFAULT_LLM_BASE_URL"),
+        },
+        "fast": {
+            # 优先使用 Ollama 本地 Llama3，不可用时回退到 default
+            "provider": os.getenv("FAST_LLM_PROVIDER", "ollama"),
+            "model": os.getenv("FAST_LLM_MODEL", "llama3:8b"),
+            "host": os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+            "timeout": 60,
+            # OpenAI fallback config
+            "api_key": os.getenv("FAST_LLM_API_KEY") or os.getenv("DEFAULT_LLM_API_KEY"),
+            "base_url": os.getenv("FAST_LLM_BASE_URL") or os.getenv("DEFAULT_LLM_BASE_URL"),
+        },
+        "vision": {
+            "provider": os.getenv("VISION_LLM_PROVIDER", "gemini"),
+            "api_key": os.getenv("VISION_LLM_API_KEY") or os.getenv("GEMINI_API_KEY"),
+            "model": os.getenv("VISION_LLM_MODEL", "gemini-1.5-flash"),
+            # OpenAI fallback
+            "base_url": os.getenv("VISION_LLM_BASE_URL"),
+        },
     }
 
     @staticmethod

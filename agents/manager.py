@@ -1,27 +1,23 @@
 import json
 import os
 from typing import List, Dict, Any, Optional
-import dateparser
 from datetime import datetime
 from agents.base import BaseAgent
-# 保留遗留代理 (Legacy Agents)
-from agents.system_agent import SystemAgent
-from agents.vision_agent import VisionAgent
-from agents.web_surfer_agent import WebSurferAgent
+# 所有代理已迁移到 Cortex Protocol (Phase 1-3)
 # 新的工具系统 (Cortex Protocol)
 from core.tools import ToolRegistry, ToolExecutor, RiskLevel
 from core.tools.base import BaseTool
 from services.memory_service import MemoryService
 from services.knowledge_service import KnowledgeService
-import legacy_tools
+from services.scheduler_service import SchedulerService
 
 
 class ManagerAgent(BaseAgent):
     """
-    混合架构 Manager Agent
+    统一架构 Manager Agent (Cortex Protocol)
     
-    新系统 (Cortex Protocol): ToolRegistry + ToolExecutor
-    遗留系统 (Legacy): VisionAgent, WebSurferAgent
+    所有工具通过 ToolRegistry + ToolExecutor 统一管理
+    唯一保留的特殊处理: switch_model (切换 LLM 模型)
     """
     
     # 意图到工具名的映射 (兼容旧 intent 字符串)
@@ -31,6 +27,21 @@ class ManagerAgent(BaseAgent):
         "search": "web_search",
         "file_io": "file_read",
         "time": "get_time",
+        # Memory & Knowledge (Cortex Protocol Migration Phase 1)
+        "remember": "memory_tool",
+        "memory_op": "memory_tool",
+        "learn": "knowledge_ingest",
+        "query_knowledge": "knowledge_query",
+        # Vision & Browser (Cortex Protocol Migration Phase 2)
+        "vision": "vision_tool",
+        "browse_task": "browser_tool",
+        # System & Schedule (Cortex Protocol Migration Phase 3)
+        "system_control": "system_tool",
+        "open_app": "system_tool",
+        "schedule": "scheduler_tool",
+        # Utility Tools
+        "weather": "get_weather",
+        "get_weather": "get_weather",
     }
     
     # ========== 确认关键词定义 ==========
@@ -61,10 +72,16 @@ class ManagerAgent(BaseAgent):
             require_confirmation_for=[]  # 空列表: 禁用 Executor 内置确认
         )
         
-        # ========== 遗留系统: Legacy Agents ==========
-        self.system_agent = SystemAgent()
-        self.vision_agent = VisionAgent()
-        self.web_surfer = WebSurferAgent()
+        # ========== SchedulerService 单例初始化 ==========
+        # 使用单例模式，如果传入了 scheduler，设置 speak_callback
+        if scheduler:
+            # scheduler 是外部传入的 SchedulerService 实例，用于设置 speak_callback
+            self._scheduler_service = SchedulerService()
+            if hasattr(scheduler, 'speak_callback'):
+                self._scheduler_service.set_speak_callback(scheduler.speak_callback)
+        else:
+            # 确保 SchedulerService 单例被初始化
+            self._scheduler_service = SchedulerService()
         
         # ========== 服务层 ==========
         self.memory = MemoryService()
@@ -166,14 +183,8 @@ class ManagerAgent(BaseAgent):
 ### 已注册工具 (来自 Cortex Protocol)
 {tools_desc}
 
-### 特殊处理 (遗留系统 / 无需工具)
-- **vision**: 【视觉能力】查看屏幕、分析图片、看图说话。
-- **browse_task**: 【浏览器自动化】复杂网页操作、表单填写、数据抓取。
-- **schedule**: 包含具体时间的提醒。
+### 特殊处理 (仅保留模型切换)
 - **switch_model**: 切换底层 LLM 模型。
-- **query_knowledge**: 询问关于项目代码库的问题 (RAG)。
-- **remember**: 让我记住某些信息。
-- **learn**: 学习某个文件/目录到知识库。
 - **chat**: 纯闲聊，不涉及操作。
 
 ### 意图选择指南
@@ -181,8 +192,8 @@ class ManagerAgent(BaseAgent):
 2. **shell/shell_execute**: Git操作、安装依赖、系统命令、运行脚本。
 3. **search/web_search**: 需要联网获取实时信息。
 4. **file_io/file_read**: 仅限单文件读取/查看。
-5. **vision**: 看屏幕、分析图片。
-6. **browse_task**: 复杂浏览器自动化任务。
+5. **vision/vision_tool**: 看屏幕、分析图片、视觉问答。
+6. **browse_task/browser_tool**: 复杂浏览器自动化任务。
 
 ### 输出格式 (JSON)
 {{
@@ -241,17 +252,24 @@ class ManagerAgent(BaseAgent):
             print(f"[Manager] 意图识别失败: {e}")
             return {"intent": "chat", "param": ""}
 
-    def _adapt_params_for_tool(self, tool_name: str, param: str) -> Dict[str, Any]:
+    def _adapt_params_for_tool(self, tool_name: str, param: str, user_input: str = "") -> Dict[str, Any]:
         """
         参数适配器：将字符串参数转换为工具所需的 Dict 格式
+        
+        Args:
+            tool_name: 工具名称
+            param: 意图识别提取的参数
+            user_input: 原始用户输入 (用于需要 LLM 解析的场景)
         """
         # 根据工具名适配参数
+        # ========== Smart Tools (V6.1 - 自带 LLM 代码/命令生成) ==========
         if tool_name == "python_execute":
-            # Python 工具需要 LLM 先生成代码
-            return {"code": param, "timeout": 60}
+            # Smart Python Tool: 传递 instruction，工具内部生成代码
+            return {"instruction": param, "timeout": 60, "max_retries": 2}
         
         elif tool_name == "shell_execute":
-            return {"command": param, "timeout": 30}
+            # Smart Shell Tool: 传递 instruction，工具内部生成命令
+            return {"instruction": param, "timeout": 30}
         
         elif tool_name == "web_search":
             return {"query": param, "max_results": 4}
@@ -262,37 +280,57 @@ class ManagerAgent(BaseAgent):
         elif tool_name == "get_time":
             return {"timezone": "Asia/Shanghai"}
         
+        # ========== Memory & Knowledge (Cortex Protocol Phase 1) ==========
+        elif tool_name == "memory_tool":
+            # 使用 LLM 解析用户输入，提取记忆结构
+            params = self._handle_memory_update(user_input or param)
+            # 检查是否返回了错误标记
+            if params.get("_error"):
+                # 返回特殊错误格式，让 _execute_with_registry 处理
+                return {"_error": True, "message": params.get("message", "记忆解析失败")}
+            return params
+        
+        elif tool_name == "knowledge_query":
+            return {"query": param, "n_results": 3}
+        
+        elif tool_name == "knowledge_ingest":
+            return {"file_path": param}
+        
+        # ========== Vision & Browser (Cortex Protocol Phase 2) ==========
+        elif tool_name == "vision_tool":
+            return {"query": param or "描述当前屏幕内容"}
+        
+        elif tool_name == "browser_tool":
+            return {"instruction": param}
+        
+        # ========== System & Schedule (Cortex Protocol Phase 3) ==========
+        elif tool_name == "system_tool":
+            # 使用 LLM 解析系统控制意图
+            return self._parse_system_intent(user_input or param)
+        
+        elif tool_name == "scheduler_tool":
+            # 使用 LLM 解析时间和内容
+            return self._parse_schedule_intent(user_input or param)
+        
+        # ========== Utility Tools ==========
+        elif tool_name == "get_weather":
+            return {"city": param or "Beijing"}
+        
         # 默认：尝试作为单一参数传递
         return {"input": param}
 
-    def _generate_python_code(self, task_description: str) -> str:
-        """使用 LLM 生成 Python 代码"""
-        prompt = [
-            {"role": "system", "content": """
-你是一个 Python 代码生成专家。根据用户任务生成可执行的 Python 代码。
-规则：
-1. 只输出代码块，不要解释
-2. 代码在 workspace/ 目录下执行
-3. 使用 print() 输出结果
-4. 如需生成文件，保存在当前目录
-"""},
-            {"role": "user", "content": task_description}
-        ]
-        
-        response = self._call_llm(prompt, temperature=0.2)
-        
-        # 提取代码块
-        import re
-        match = re.search(r"```python(.*?)```", response, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-        match = re.search(r"```(.*?)```", response, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-        return response.strip()
+    # NOTE: _generate_python_code 已移除 (Jarvis V6.1)
+    # 代码生成逻辑已下沉到 PythonExecutorTool (Smart Tool)
+    # Manager 不再负责代码生成，只负责意图识别和工具调度
 
-    def _handle_memory_update(self, user_input: str) -> str:
-        """分析用户输入并更新记忆"""
+    def _handle_memory_update(self, user_input: str) -> Dict[str, Any]:
+        """
+        使用 LLM 分析用户输入，提取记忆信息并转换为 MemoryTool 参数格式。
+        
+        Returns:
+            Dict: MemoryTool 所需的参数 {"action": ..., "key": ..., "value": ...}
+                  或错误标记 {"_error": True, "message": ...}
+        """
         prompt = [
             {"role": "system", "content": """
 请分析用户的话，提取记忆信息。返回 JSON。
@@ -309,19 +347,132 @@ class ManagerAgent(BaseAgent):
             clean_json = response.replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_json)
             
-            if data["type"] == "name":
-                self.memory.update_profile("name", data["value"])
-                return f"好的，我已经记住了，以后就叫您 {data['value']}。"
-            elif data["type"] == "preference":
-                self.memory.update_profile(data["key"], data["value"])
-                return f"好的，记住了您的偏好：{data['value']}。"
-            elif data["type"] == "note":
-                self.memory.add_note(data["value"])
-                return "好的，已经添加到备忘录了。"
-        except Exception as e:
-            print(f"[Memory Update Error]: {e}")
+            # 验证必要字段
+            if "type" not in data:
+                raise ValueError("Missing 'type' field in LLM response")
             
-        return "抱歉，我没太听清您想让我记住什么。"
+            if data["type"] == "name":
+                if "value" not in data or not str(data["value"]).strip():
+                    raise ValueError("Name value is empty")
+                return {"action": "update_profile", "key": "name", "value": str(data["value"]).strip()}
+            elif data["type"] == "preference":
+                if "value" not in data or not str(data["value"]).strip():
+                    raise ValueError("Preference value is empty")
+                key = data.get("key", "偏好")
+                if not key or not str(key).strip():
+                    key = "偏好"
+                return {"action": "update_profile", "key": str(key).strip(), "value": str(data["value"]).strip()}
+            elif data["type"] == "note":
+                if "value" not in data or not str(data["value"]).strip():
+                    raise ValueError("Note value is empty")
+                return {"action": "add_note", "value": str(data["value"]).strip()}
+            else:
+                raise ValueError(f"Unknown memory type: {data['type']}")
+                
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            print(f"[Memory Update Error]: {e}")
+            # 返回错误标记，而非静默回退到 add_note
+            return {
+                "_error": True,
+                "message": f"无法理解您想让我记住什么。请更清楚地说明，例如：'记住我叫小明' 或 '记住我喜欢咖啡'。"
+            }
+
+    def _parse_system_intent(self, user_input: str) -> Dict[str, Any]:
+        """
+        使用 LLM 解析系统控制意图，提取 action/value。
+        
+        Returns:
+            Dict: SystemTool 所需的参数 {"action": ..., "value": ...}
+        """
+        prompt = [
+            {"role": "system", "content": """
+分析用户输入，识别系统控制操作。返回 JSON。
+
+可用操作 (action 必须是以下之一):
+- volume: 音量控制 (value: 0-100 或 "+10"/"-10")
+- brightness: 亮度控制 (value: 0-100)
+- media_control: 媒体控制 (value: "play"/"pause"/"next"/"prev")
+- open_app: 打开应用 (value: 应用名称)
+
+格式示例:
+{"action": "volume", "value": "50"}
+{"action": "open_app", "value": "微信"}
+{"action": "media_control", "value": "pause"}
+{"action": "brightness", "value": "70"}
+"""},
+            {"role": "user", "content": user_input}
+        ]
+        
+        try:
+            response = self._call_llm(prompt, temperature=0.1)
+            clean_json = response.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_json)
+            
+            action = data.get("action", "open_app")
+            result = {"action": action}
+            
+            # 统一使用 value 字段
+            if "value" in data:
+                result["value"] = str(data["value"])
+            elif "target" in data:
+                # 兼容旧格式: target -> value
+                result["value"] = str(data["target"])
+            
+            return result
+            
+        except Exception as e:
+            print(f"[System Intent Parse Error]: {e}")
+            # 默认当作打开应用处理
+            return {"action": "open_app", "value": user_input}
+
+    def _parse_schedule_intent(self, user_input: str) -> Dict[str, Any]:
+        """
+        使用 LLM 解析日程/提醒意图，提取时间和内容。
+        
+        Returns:
+            Dict: SchedulerTool 所需的参数 {"action": ..., "content": ..., "time_str": ...}
+        """
+        prompt = [
+            {"role": "system", "content": """
+分析用户输入，提取提醒信息。返回 JSON。
+
+可用操作 (action 必须是以下之一):
+- add_reminder: 添加新提醒 (需要 time_str 和 content)
+- list_reminders: 列出所有提醒
+
+格式示例:
+{"action": "add_reminder", "time_str": "明天上午9点", "content": "开会"}
+{"action": "add_reminder", "time_str": "5分钟后", "content": "喝水"}
+{"action": "list_reminders"}
+
+注意:
+- time_str 保留用户原始时间表达，如 "明天下午3点", "10分钟后"
+- content 是提醒内容
+- 如果用户问有什么提醒/任务，用 action: "list_reminders"
+"""},
+            {"role": "user", "content": user_input}
+        ]
+        
+        try:
+            response = self._call_llm(prompt, temperature=0.1)
+            clean_json = response.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_json)
+            
+            result = {"action": data.get("action", "add_reminder")}
+            if "content" in data:
+                result["content"] = str(data["content"])
+            if "time_str" in data:
+                result["time_str"] = str(data["time_str"])
+            
+            return result
+            
+        except Exception as e:
+            print(f"[Schedule Intent Parse Error]: {e}")
+            # 无法解析时返回错误标记
+            return {
+                "_error": True,
+                "message": "无法理解您的提醒时间。请说明具体时间，例如：'10分钟后提醒我喝水'"
+            }
 
     def _execute_with_registry(self, intent: str, param: str) -> Optional[str]:
         """
@@ -347,15 +498,16 @@ class ManagerAgent(BaseAgent):
         
         print(f"[Manager] 使用 Cortex Protocol: {tool.name} (Risk: {tool.risk_level.value})")
         
-        # 特殊处理: python_task 需要先生成代码
-        if tool.name == "python_execute" and not param.strip().startswith(("import ", "def ", "class ", "from ", "#")):
-            # param 是自然语言描述，需要先转换为代码
-            print(f"[Manager] 生成 Python 代码...")
-            code = self._generate_python_code(param)
-            params = {"code": code, "timeout": 60}
-        else:
-            # 适配参数格式
-            params = self._adapt_params_for_tool(tool.name, param)
+        # 适配参数格式 (传入 user_input 用于需要 LLM 解析的工具)
+        # NOTE: V6.1 - Smart Tools (python_execute, shell_execute) 自带 LLM 代码生成
+        #       Manager 只传递 instruction，工具内部处理代码生成
+        user_input = self.history[-1]["content"] if self.history else param
+        params = self._adapt_params_for_tool(tool.name, param, user_input)
+        
+        # ========== 检查参数适配是否返回错误 ==========
+        if isinstance(params, dict) and params.get("_error"):
+            # 参数解析失败，直接返回错误消息
+            return params.get("message", "参数解析失败")
         
         # ========== Step A: 拦截危险操作 ==========
         if tool.risk_level == RiskLevel.DANGEROUS:
@@ -446,79 +598,21 @@ class ManagerAgent(BaseAgent):
         # ========== Step C: 检测待确认状态 (Soft Context Injection) ==========
         # 如果 _execute_with_registry 设置了 pending_action，构建 System Report
         if self._is_awaiting_confirmation() and not tool_output:
-            pending = self.pending_action
-            assert pending is not None  # Type guard: _is_awaiting_confirmation 已确保非空
-            param_preview = str(pending["params"])[:100] + "..." if len(str(pending["params"])) > 100 else str(pending["params"])
-            
-            # 构建结构化的 System Report，注入 LLM 上下文
+            # 构建强权威性的 System Report，防止 LLM "拒绝幻觉"
             tool_output = (
-                f"⛔ 【系统报告 - 操作已拦截】\n"
-                f"状态: BLOCKED - 待用户确认 (操作尚未执行)\n"
-                f"⚠️ 风险等级: 危险\n"
-                f"📋 工具名称: {pending['tool'].name}\n"
-                f"📝 操作描述: {pending['description']}\n"
-                f"🔧 操作参数: {param_preview}\n\n"
-                f"【指令】此操作因高风险被系统拦截，尚未执行。"
-                f"请以你的人格向主人解释这个操作的潜在风险，并温柔地询问主人是否确认执行（说「是」或「确认」来执行，说「不」或「取消」来放弃）。"
-                f"切勿声称操作已完成。"
+                f"【⚡ 系统权限验证】检测到高权限操作请求：{intent}。\n"
+                f"执行动作: {param}\n"
+                f"当前状态: ⛔ 已挂起 (PENDING)，等待授权。\n\n"
+                "👉 对 LLM 的强制指令：\n"
+                "1. **绝对不要道歉**，也不要说你无法执行（系统其实可以执行，只是在等信号）。\n"
+                "2. 请用温柔自信的语气告诉主人：'这个操作涉及系统/网络权限，为了安全，我已经把它暂停了。'\n"
+                "3. **必须**询问主人：'您确认要执行吗？'。"
             )
         
-        # ========== Priority 2: 遗留系统回退 ==========
-        elif intent == "vision":
-            tool_output = self.vision_agent.run(param)
+        # ========== Priority 2: 仅保留模型切换 (switch_model) ==========
+        # NOTE: 所有工具已迁移到 Cortex Protocol (Phase 1-3)
+        # system_control, open_app, schedule 已迁移到 system_tool, scheduler_tool
         
-        elif intent == "browse_task":
-            tool_output = self.web_surfer.run(param)
-        
-        elif intent == "system_control":
-            tool_output = self.system_agent.run(param)
-        
-        elif intent == "open_app":
-            success, msg = legacy_tools.open_app(param)
-            tool_output = msg
-        
-        elif intent == "schedule":
-            if self.scheduler:
-                prompt = [
-                    {"role": "system", "content": '提取时间与内容。格式：{"time_str": "...", "content": "..."}'},
-                    {"role": "user", "content": param or user_input}
-                ]
-                try:
-                    resp = self._call_llm(prompt, temperature=0.1)
-                    clean = resp.replace("```json", "").replace("```", "").strip()
-                    data = json.loads(clean)
-                    time_str = data.get("time_str", "")
-                    content = data.get("content", "提醒")
-                    
-                    dt_obj = dateparser.parse(time_str)
-                    if dt_obj:
-                        self.scheduler.add_reminder(content, dt_obj)
-                        tool_output = f"好的，已设定在 {dt_obj.strftime('%H:%M')} 提醒您：{content}"
-                    else:
-                        tool_output = "抱歉，我没听懂具体的时间。"
-                except Exception as e:
-                    tool_output = f"设定提醒失败：{str(e)}"
-            else:
-                tool_output = "抱歉，调度服务未启动。"
-        
-        elif intent == "remember":
-            tool_output = self._handle_memory_update(param or user_input)
-            
-        elif intent == "learn":
-            target_path = param.strip()
-            if not os.path.exists(target_path):
-                potential_path = os.path.join(os.getcwd(), target_path)
-                if os.path.exists(potential_path):
-                    target_path = potential_path
-            tool_output = self.knowledge_service.ingest_file(target_path)
-            
-        elif intent == "query_knowledge":
-            docs = self.knowledge_service.query_knowledge(param or user_input)
-            if docs:
-                tool_output = "检索到的参考资料（请基于此回答）：\n" + "\n---\n".join(docs)
-            else:
-                tool_output = "知识库中没有找到相关内容，请尝试联网搜索。"
-
         elif intent == "switch_model":
             target_model = param.lower()
             if "gemini" in target_model or "vision" in target_model:
@@ -530,10 +624,6 @@ class ManagerAgent(BaseAgent):
             
             success = self.update_model_config(target_model)
             if success:
-                # 级联切换遗留代理
-                for agent in [self.system_agent, self.vision_agent, self.web_surfer]:
-                    if hasattr(agent, 'update_model_config'):
-                        agent.update_model_config(target_model)
                 tool_output = f"已成功切换至 {target_model} 模式。"
             else:
                 tool_output = f"切换失败：未找到模式 {target_model}。"
@@ -557,10 +647,5 @@ class ManagerAgent(BaseAgent):
 
     def close(self):
         super().close()
-        # 关闭遗留代理
-        if hasattr(self.system_agent, 'close'):
-            self.system_agent.close()
-        if hasattr(self.vision_agent, 'close'):
-            self.vision_agent.close()
-        if hasattr(self.web_surfer, 'close'):
-            self.web_surfer.close()
+        # 所有代理已迁移到 Cortex Protocol 工具层，由工具自行管理生命周期
+        pass

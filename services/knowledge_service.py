@@ -2,6 +2,7 @@ import os
 import hashlib
 import chromadb
 import logging
+import threading
 import torch
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
@@ -11,26 +12,55 @@ from typing import List, Dict, Any
 # 配置日志，防止控制台一片空白
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-class KnowledgeService:
-    def __init__(self):
-        self.persist_directory = os.path.join("data", "vector_db")
-        os.makedirs(self.persist_directory, exist_ok=True)
-        
-        # 初始化 ChromaDB
-        try:
-            self.client = chromadb.PersistentClient(path=self.persist_directory)
-            # 获取或创建集合
-            self.collection = self.client.get_or_create_collection(name="jarvis_knowledge")
-        except Exception as e:
-            logging.error(f"ChromaDB init failed: {e}")
-            raise e
-        
-        # 初始化 Embedding 模型
-        logging.info("Loading embedding model (all-MiniLM-L6-v2)...")
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = SentenceTransformer("all-MiniLM-L6-v2") 
-        logging.info("Embedding model loaded.")
+class KnowledgeService:
+    """
+    知识库管理服务 (Singleton)
+    
+    使用单例模式确保:
+    1. 整个应用只加载一次 Embedding 模型（节省内存/GPU）
+    2. ChromaDB 客户端只初始化一次
+    3. ManagerAgent 和 KnowledgeTool 共享同一实例
+    """
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                # Double-check locking pattern
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        # 线程安全的初始化检查
+        with self._lock:
+            if self._initialized:
+                return
+            
+            self.persist_directory = os.path.join("data", "vector_db")
+            os.makedirs(self.persist_directory, exist_ok=True)
+            
+            # 初始化 ChromaDB
+            try:
+                self.client = chromadb.PersistentClient(path=self.persist_directory)
+                # 获取或创建集合
+                self.collection = self.client.get_or_create_collection(name="jarvis_knowledge")
+            except Exception as e:
+                logging.error(f"ChromaDB init failed: {e}")
+                raise e
+            
+            # 初始化 Embedding 模型
+            logging.info("Loading embedding model (all-MiniLM-L6-v2)...")
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.model = SentenceTransformer("all-MiniLM-L6-v2") 
+            logging.info("Embedding model loaded.")
+            
+            self._initialized = True
 
     def _calculate_hash(self, file_path):
         """计算文件的 MD5"""

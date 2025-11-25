@@ -1,12 +1,39 @@
 import json
 import os
+import threading
+
 
 class MemoryService:
+    """
+    用户档案与备忘录管理服务 (Singleton)
+    
+    使用单例模式确保整个应用中只有一个实例，
+    避免多个组件（ManagerAgent, MemoryTool）持有不同实例导致数据不一致。
+    """
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                # Double-check locking pattern
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self):
-        self.data_dir = "data"
-        self.file_path = os.path.join(self.data_dir, "user_profile.json")
-        self._ensure_data_dir()
-        self.profile = self.load_profile()
+        # 线程安全的初始化检查
+        with self._lock:
+            if self._initialized:
+                return
+            
+            self.data_dir = "data"
+            self.file_path = os.path.join(self.data_dir, "user_profile.json")
+            self._ensure_data_dir()
+            self.profile = self.load_profile()
+            self._initialized = True
 
     def _ensure_data_dir(self):
         if not os.path.exists(self.data_dir):

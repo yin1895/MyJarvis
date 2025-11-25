@@ -1,10 +1,15 @@
-# Jarvis Cortex Protocol - Shell Tool
+# Jarvis Cortex Protocol - Shell Tool (Smart Tool V6.1)
 # tools/shell_tool.py
 
 """
-ShellTool: Execute shell commands with safety checks.
+ShellTool: Smart shell command generation and execution.
 
-Migrated from: agents/shell_agent.py
+Jarvis V6.1 Upgrade:
+- Accepts 'instruction' (natural language) OR 'command' (raw shell command)
+- Uses LLMFactory.get_model("fast") for command generation
+- Self-contained: no dependency on ManagerAgent for command translation
+- Safety checks for dangerous commands
+
 Risk Level: DANGEROUS (requires user confirmation)
 """
 
@@ -17,10 +22,22 @@ from core.tools.base import BaseTool, RiskLevel, ToolResult
 
 
 class ShellInput(BaseModel):
-    """Input schema for shell command execution."""
-    command: str = Field(
-        ..., 
-        description="要执行的 Shell 命令 (PowerShell/CMD)",
+    """
+    Input schema for Shell tool.
+    
+    Accepts either:
+    - instruction: Natural language description (LLM generates command)
+    - command: Raw shell command to execute directly
+    
+    If both provided, 'command' takes precedence.
+    """
+    instruction: Optional[str] = Field(
+        default=None,
+        description="自然语言指令 (如 '查看 git 状态', '安装 pandas')。工具会自动生成对应命令。"
+    )
+    command: Optional[str] = Field(
+        default=None,
+        description="要直接执行的 Shell 命令 (PowerShell/CMD)。如果提供，将跳过命令生成。",
         examples=["git status", "pip list", "dir"]
     )
     cwd: Optional[str] = Field(
@@ -37,22 +54,24 @@ class ShellInput(BaseModel):
 
 class ShellTool(BaseTool[ShellInput]):
     """
-    Execute shell commands with safety checks.
+    Smart Shell Tool: Generate and execute shell commands.
     
     Features:
+    - Natural language to command via LLM (using 'fast' role)
+    - Direct command execution
     - Forbidden command blacklist (rm, del, format, etc.)
     - Configurable timeout
     - Structured output with exit code
     
-    This tool is marked as DANGEROUS and requires user confirmation
-    before execution through the ToolExecutor middleware.
+    This is a "Smart Tool" that encapsulates its own LLM logic,
+    freeing ManagerAgent from command translation responsibilities.
     """
     
     name = "shell_execute"
-    description = "执行 Shell 命令 (PowerShell/CMD)。适用于 Git 操作、包管理、系统命令等。"
+    description = "执行 Shell 命令。可接受自然语言指令（自动生成命令）或直接执行命令。适用于 Git 操作、包管理、系统命令等。"
     risk_level = RiskLevel.DANGEROUS
     InputSchema = ShellInput
-    tags = ["shell", "system", "command"]
+    tags = ["shell", "system", "command", "smart"]
     
     # Command safety configuration
     FORBIDDEN_PATTERNS: List[str] = [
@@ -75,9 +94,61 @@ class ShellTool(BaseTool[ShellInput]):
         "reboot",
     ]
     
+    # Command generation system prompt
+    CMD_GEN_PROMPT = """你是一个 Shell 命令专家。根据用户的自然语言指令生成 Windows PowerShell 命令。
+
+规则：
+1. 只输出命令本身，不要解释
+2. 命令应该在 Windows PowerShell 或 CMD 中可执行
+3. 如果任务需要多条命令，用 ; 或 && 连接
+4. 避免危险命令 (rm -rf, format, shutdown 等)
+5. Git 操作、包管理、文件操作都可以
+
+示例:
+- "查看 git 状态" -> git status
+- "安装 pandas" -> pip install pandas
+- "列出当前目录文件" -> dir 或 Get-ChildItem
+- "创建名为 test 的文件夹" -> mkdir test
+- "提交代码" -> git add . && git commit -m "update"
+"""
+    
     def __init__(self):
         super().__init__()
         self.default_cwd = os.getcwd()
+        self._llm = None  # Lazy init
+    
+    @property
+    def llm(self):
+        """Lazy initialization of LLM (fast role)."""
+        if self._llm is None:
+            from core.llm import LLMFactory
+            self._llm = LLMFactory.get_model("fast")
+            print(f"[ShellTool] Using LLM: {self._llm.model_name}")
+        return self._llm
+    
+    def _generate_command(self, instruction: str) -> str:
+        """Generate shell command from natural language instruction."""
+        messages = [
+            {"role": "system", "content": self.CMD_GEN_PROMPT},
+            {"role": "user", "content": instruction}
+        ]
+        
+        response = self.llm.chat(messages, temperature=0.1)
+        
+        # Clean up response - remove code blocks if present
+        command = response.strip()
+        if command.startswith("```"):
+            # Extract from code block
+            lines = command.split("\n")
+            # Filter out ``` lines
+            command_lines = [l for l in lines if not l.strip().startswith("```")]
+            command = "\n".join(command_lines).strip()
+        
+        # Remove leading $ or > if present (common in examples)
+        if command.startswith("$ ") or command.startswith("> "):
+            command = command[2:]
+        
+        return command
     
     def _check_command_safety(self, command: str) -> Optional[str]:
         """
@@ -104,10 +175,28 @@ class ShellTool(BaseTool[ShellInput]):
         return None
     
     def execute(self, params: ShellInput) -> ToolResult:
-        """Execute the shell command."""
-        command = params.command.strip()
-        cwd = params.cwd or self.default_cwd
-        timeout = params.timeout
+        """Execute shell command with optional command generation."""
+        
+        # Determine command source
+        if params.command:
+            command = params.command.strip()
+            generated = False
+        elif params.instruction:
+            print(f"[ShellTool] Generating command for: {params.instruction[:50]}...")
+            command = self._generate_command(params.instruction)
+            generated = True
+            print(f"[ShellTool] Generated command: {command}")
+        else:
+            return ToolResult(
+                success=False,
+                error="请提供 'instruction' (自然语言指令) 或 'command' (Shell 命令)"
+            )
+        
+        if not command:
+            return ToolResult(
+                success=False,
+                error="命令生成失败，请尝试更清晰的指令描述"
+            )
         
         # Safety check
         safety_error = self._check_command_safety(command)
@@ -115,8 +204,11 @@ class ShellTool(BaseTool[ShellInput]):
             return ToolResult(
                 success=False,
                 error=safety_error,
-                metadata={"command": command, "blocked": True}
+                metadata={"command": command, "blocked": True, "generated": generated}
             )
+        
+        cwd = params.cwd or self.default_cwd
+        timeout = params.timeout
         
         # Validate working directory
         if not os.path.isdir(cwd):
@@ -148,25 +240,27 @@ class ShellTool(BaseTool[ShellInput]):
             if len(stderr) > max_output_length:
                 stderr = stderr[:max_output_length] + "\n...[错误信息过长已截断]"
             
+            output_data = {
+                "command": command,
+                "output": stdout or "(无输出)",
+                "exit_code": result.returncode,
+            }
+            
+            if generated:
+                output_data["instruction"] = params.instruction
+                output_data["generated"] = True
+            
             if result.returncode == 0:
                 return ToolResult(
                     success=True,
-                    data={
-                        "command": command,
-                        "output": stdout or "(无输出)",
-                        "exit_code": 0
-                    },
-                    metadata={"cwd": cwd}
+                    data=output_data,
+                    metadata={"cwd": cwd, "generated": generated}
                 )
             else:
+                output_data["stderr"] = stderr
                 return ToolResult(
                     success=False,
-                    data={
-                        "command": command,
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exit_code": result.returncode
-                    },
+                    data=output_data,
                     error=f"命令执行失败 (退出码: {result.returncode}): {stderr[:200]}"
                 )
                 
@@ -174,7 +268,7 @@ class ShellTool(BaseTool[ShellInput]):
             return ToolResult(
                 success=False,
                 error=f"命令执行超时 ({timeout}秒)",
-                metadata={"command": command, "timeout": timeout}
+                metadata={"command": command, "timeout": timeout, "generated": generated}
             )
         except Exception as e:
             return ToolResult(
@@ -184,43 +278,11 @@ class ShellTool(BaseTool[ShellInput]):
             )
 
 
-# === LLM-Powered Natural Language to Command Tool ===
+# === Backward Compatibility Aliases ===
 
-class NaturalLanguageShellInput(BaseModel):
-    """Input for natural language shell command generation."""
-    instruction: str = Field(
-        ...,
-        description="用户的自然语言指令 (如 '查看 git 状态', '安装 pandas')"
-    )
+# Old input class name
+ShellInput_Legacy = ShellInput
 
-
-class NaturalLanguageShellTool(BaseTool[NaturalLanguageShellInput]):
-    """
-    Convert natural language to shell commands using LLM.
-    
-    This tool wraps ShellTool and adds LLM-based command generation.
-    Note: Actual LLM call is delegated to the Agent layer (ManagerAgent).
-    This tool just defines the interface.
-    """
-    
-    name = "shell_nl"
-    description = "将自然语言转换为 Shell 命令并执行。如 '提交代码' -> 'git commit'"
-    risk_level = RiskLevel.DANGEROUS
-    InputSchema = NaturalLanguageShellInput
-    tags = ["shell", "nlp", "command"]
-    
-    def execute(self, params: NaturalLanguageShellInput) -> ToolResult:
-        """
-        This method is a placeholder.
-        
-        In the actual implementation, ManagerAgent will:
-        1. Call LLM to convert instruction to command
-        2. Execute the command via ShellTool
-        
-        This structure exists for schema generation purposes.
-        """
-        return ToolResult(
-            success=False,
-            error="此工具需要 LLM 支持，请通过 ManagerAgent 调用",
-            metadata={"instruction": params.instruction}
-        )
+# NaturalLanguageShellTool is now merged into ShellTool
+# Keep alias for backward compatibility
+NaturalLanguageShellTool = ShellTool

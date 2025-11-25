@@ -7,18 +7,92 @@ from agents.base import BaseAgent
 from config import Config
 from pydantic import SecretStr
 
+
+class LLMWrapper:
+    """
+    LLM 包装类，为 browser-use 库添加 provider 属性兼容性。
+    browser-use 内部会访问 llm.provider 来区分不同模型类型，
+    但标准 LangChain ChatOpenAI 对象没有此属性。
+    
+    V6.1 Fix:
+    - 使用 object.__setattr__ 避免 __getattr__ 递归
+    - 显式定义 provider 属性
+    - 正确代理所有属性访问
+    """
+    def __init__(self, llm: Any, provider: str = "openai"):
+        # 使用 object.__setattr__ 避免触发 __getattr__
+        object.__setattr__(self, '_llm', llm)
+        object.__setattr__(self, 'provider', provider)
+    
+    def __getattr__(self, name: str) -> Any:
+        # 代理所有其他属性/方法调用到原始 llm
+        _llm = object.__getattribute__(self, '_llm')
+        return getattr(_llm, name)
+    
+    def __setattr__(self, name: str, value: Any) -> None:
+        # provider 存储在 wrapper 本身
+        if name == 'provider':
+            object.__setattr__(self, name, value)
+        else:
+            # 其他属性设置到底层 llm
+            _llm = object.__getattribute__(self, '_llm')
+            setattr(_llm, name, value)
+
+
 class WebSurferAgent(BaseAgent):
     def __init__(self):
         super().__init__(name="WebSurferAgent")
+        # 初始化 LangChain LLM (browser-use 需要)
+        self._init_langchain_llm()
+
+    def _init_langchain_llm(self):
+        """初始化 LangChain ChatOpenAI 对象供 browser-use 使用"""
+        # 使用 BaseAgent 已加载的配置
+        preset = Config.MODEL_PRESETS.get(
+            Config.AGENT_MODEL_MAP.get(self.__class__.__name__, "default"),
+            Config.MODEL_PRESETS.get("default", {})
+        )
         
+        try:
+            self.llm = ChatOpenAI(
+                api_key=preset.get("api_key", ""),
+                base_url=preset.get("base_url"),
+                model=preset.get("model", "gpt-4o"),
+                temperature=0.0  # 保持低温以确保操作精准
+            )
+        except Exception as e:
+            print(f"[{self.name}] LangChain LLM 初始化失败: {e}")
+            self.llm = None
+
+    def _get_provider_name(self) -> str:
+        """根据模型名推断 provider 类型"""
+        # 优先使用 self.model_name (从 BaseAgent 继承)
+        model_name = getattr(self, "model_name", "") or ""
+        if not model_name and self.llm:
+            model_name = getattr(self.llm, "model_name", "") or getattr(self.llm, "model", "")
+        model_lower = str(model_name).lower()
+        
+        if "gemini" in model_lower:
+            return "google"
+        elif "claude" in model_lower:
+            return "anthropic"
+        else:
+            return "openai"
 
     async def _run_browser_task(self, task: str) -> str:
         try:
+            # 检查 LLM 是否已初始化
+            if self.llm is None:
+                return "Browser Task Failed: LangChain LLM 未初始化，请检查 Vision 模型配置。"
+            
+            # 包装 LLM 以添加 provider 属性兼容性
+            wrapped_llm = LLMWrapper(self.llm, provider=self._get_provider_name())
+            
             # 创建 Browser Use Agent
             # 注意：默认情况下 browser-use 可能会尝试打开浏览器窗口 (headless=False)
             agent = Agent(
                 task=task,
-                llm=cast(Any, self.llm),
+                llm=cast(Any, wrapped_llm),
             )
             
             
@@ -51,15 +125,20 @@ class WebSurferAgent(BaseAgent):
         if not preset:
             return False
         
-        # 3. 重新初始化 LangChain 的 ChatOpenAI 对象
+        # 3. 检查 API Key
+        api_key = preset.get("api_key")
+        if not api_key:
+            print(f"[{self.name}] Switch failed: Preset '{preset_name}' has no API Key.")
+            return False
+        
+        # 4. 重新初始化 LangChain 的 ChatOpenAI 对象
         # 注意：Browser-use 强依赖高智商模型，如果切换到 local 模型可能会导致任务失败，但我们仍需允许切换以便测试
         try:
-            from langchain_openai import ChatOpenAI
             self.llm = ChatOpenAI(
-                api_key=preset["api_key"],
-                base_url=preset["base_url"],
-                model=preset["model"],
-                temperature=0.0 # 保持低温以确保操作精准
+                api_key=api_key,
+                base_url=preset.get("base_url"),
+                model=preset.get("model", "gpt-4o"),
+                temperature=0.0  # 保持低温以确保操作精准
             )
             print(f"[{self.name}] LangChain LLM 已同步切换至: {preset_name}")
             return True
