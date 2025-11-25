@@ -109,6 +109,7 @@ class PythonAgent(BaseAgent):
    - 必须保存为图片文件 (e.g. `plt.savefig('result.png')`)，禁止使用 `plt.show()`。
 5. 输出规范:
    - 任何结果必须使用 `print()` 输出到标准输出，否则用户看不到。
+6. **网络请求**: 使用 `requests` 库时，**严禁**直接调用 `.json()`。必须先检查 `if response.status_code == 200:`。如果状态码不是 200，必须执行 `print(f"Error: {response.status_code}, Content: {response.text}")` 以便调试。
 
 【回复格式】
 请直接返回可执行的 Python 代码块，包裹在 ```python ... ``` 中。

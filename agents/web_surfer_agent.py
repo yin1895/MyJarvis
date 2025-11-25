@@ -10,14 +10,6 @@ from pydantic import SecretStr
 class WebSurferAgent(BaseAgent):
     def __init__(self):
         super().__init__(name="WebSurferAgent")
-        # 初始化 LangChain 兼容的 LLM
-        # browser-use 推荐使用 GPT-4o 或同等能力的模型以获得最佳效果
-        self.llm = ChatOpenAI(
-            api_key=SecretStr(Config.LLM_API_KEY) if Config.LLM_API_KEY is not None else None,
-            base_url=Config.LLM_BASE_URL,
-            model=Config.LLM_MODEL,
-            temperature=0.0, # 动作执行需要精确
-        )
         
 
     async def _run_browser_task(self, task: str) -> str:

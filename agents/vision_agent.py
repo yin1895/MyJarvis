@@ -1,27 +1,15 @@
 import base64
 import io
 import pyautogui
-import httpx
 from PIL import Image
-from openai import OpenAI
 from agents.base import BaseAgent
-from config import Config
 from typing import Any, cast
 
 class VisionAgent(BaseAgent):
     def __init__(self):
-        # 不调用 super().__init__，因为我们需要连接到 Google 而不是默认 LLM
-        self.name = "VisionAgent"
-        
-        # 专门为 VisionAgent 创建连接到 Google 的 Client
-        self._http_client = httpx.Client() # 代理已由 Config.setup_env_proxy() 全局设置
-        
-        self.client = OpenAI(
-            api_key=Config.GOOGLE_API_KEY,
-            base_url=Config.GOOGLE_BASE_URL,
-            http_client=self._http_client
-        )
-        self.model = Config.VISION_MODEL
+        # Initialize BaseAgent, which handles model loading based on AGENT_MODEL_MAP
+        # It will automatically load the "vision" role configuration
+        super().__init__(name="VisionAgent")
 
     def _take_screenshot(self) -> str:
         """截取屏幕并转换为 Base64 字符串"""
@@ -58,7 +46,7 @@ class VisionAgent(BaseAgent):
         if not base64_image:
             return "抱歉，我无法截取屏幕画面，请检查权限。"
 
-        print(f"[VisionAgent]: 正在请求 Gemini ({self.model}) 分析...", flush=True)
+        print(f"[VisionAgent]: 正在请求 Vision Model ({self.model_name}) 分析...", flush=True)
         
         # 构建多模态消息 (OpenAI 兼容格式)
         messages = [
@@ -76,7 +64,7 @@ class VisionAgent(BaseAgent):
 
         try:
             response = self.client.chat.completions.create(
-                model=self.model,
+                model=self.model_name,
                 messages=cast(Any, messages),
                 max_tokens=1000
             )
@@ -86,6 +74,3 @@ class VisionAgent(BaseAgent):
             print(f"[VisionAgent Error]: {e}")
             return f"视觉分析出错了: {e}"
 
-    def close(self):
-        if hasattr(self, '_http_client') and self._http_client:
-            self._http_client.close()

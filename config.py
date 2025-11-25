@@ -14,51 +14,42 @@ class Config:
     USE_BUILTIN_KEYWORD = os.getenv("USE_BUILTIN_KEYWORD", "true").lower() == "true"
     WAKE_WORD_FILE = os.getenv("WAKE_WORD_FILE", "jarvis.ppn")
     
-    # LLM
-    LLM_API_KEY = os.getenv("LLM_API_KEY")
-    LLM_BASE_URL = os.getenv("LLM_BASE_URL")
-    LLM_MODEL = os.getenv("LLM_MODEL", "x-ai/grok-4.1-fast:free")
-    
-    # Google Gemini (Vision)
-    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    GOOGLE_BASE_URL = os.getenv("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-    VISION_MODEL = os.getenv("VISION_MODEL", "gemini-1.5-flash")
-    
-    # Groq
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    
-    # TTS
+    # --- TTS ---
     TTS_VOICE = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
-    # 唤醒词灵敏度 (0.0 - 1.0)
+    
+    # --- 唤醒词灵敏度 ---
     try:
         WAKE_SENSITIVITY = float(os.getenv("WAKE_SENSITIVITY", "0.7"))
-        # clamp
-        if WAKE_SENSITIVITY < 0.0:
-            WAKE_SENSITIVITY = 0.0
-        if WAKE_SENSITIVITY > 1.0:
-            WAKE_SENSITIVITY = 1.0
+        if WAKE_SENSITIVITY < 0.0: WAKE_SENSITIVITY = 0.0
+        if WAKE_SENSITIVITY > 1.0: WAKE_SENSITIVITY = 1.0
     except Exception:
         WAKE_SENSITIVITY = 0.8
 
-    # 模型预设配置
+    # --- LLM 角色预设 (Role Presets) ---
     MODEL_PRESETS = {
         "default": {
-            "api_key": os.getenv("LLM_API_KEY"),
-            "base_url": os.getenv("LLM_BASE_URL"),
-            "model": os.getenv("LLM_MODEL")
+            "api_key": os.getenv("DEFAULT_LLM_API_KEY"),
+            "base_url": os.getenv("DEFAULT_LLM_BASE_URL", "https://api.openai.com/v1"),
+            "model": os.getenv("DEFAULT_LLM_MODEL", "gpt-3.5-turbo")
         },
-        # Google Gemini (视觉/长文本强项)
-        "gemini": {
-            "api_key": os.getenv("GOOGLE_API_KEY"),
-            "base_url": os.getenv("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
-            "model": os.getenv("VISION_MODEL", "gemini-1.5-flash")
+        "smart": {
+            "api_key": os.getenv("SMART_LLM_API_KEY"),
+            "base_url": os.getenv("SMART_LLM_BASE_URL"),
+            "model": os.getenv("SMART_LLM_MODEL")
         },
-        # 本地 Ollama (隐私/离线)
-        "local": {
-            "api_key": "ollama",
-            "base_url": "http://localhost:11434/v1",
-            "model": "llama3" # 或 user 指定的其他本地模型
+        "vision": {
+            "api_key": os.getenv("VISION_LLM_API_KEY"),
+            "base_url": os.getenv("VISION_LLM_BASE_URL"),
+            "model": os.getenv("VISION_LLM_MODEL")
         }
+    }
+
+    # --- Agent 路由映射 ---
+    # 未在此列出的 Agent 默认使用 "default"
+    AGENT_MODEL_MAP = {
+        "PythonAgent": "smart",
+        "VisionAgent": "vision",
+        "WebSurferAgent": "vision"
     }
 
     @staticmethod

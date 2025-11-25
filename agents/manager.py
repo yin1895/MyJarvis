@@ -72,13 +72,15 @@ class ManagerAgent(BaseAgent):
    - *例子*: "git status", "pip install pandas", "运行 python script.py".
 3. **file_io**: 【仅限单文件读取/查看】绝对不做修改/删除操作。
    - *例子*: "读一下 main.py", "看看当前目录下有什么文件".
-4. **search**: 需要联网获取实时信息。
-5. **query_knowledge**: 询问关于项目代码库的问题、报错解决方案、文档内容 (RAG)。
+4. **vision**: 【视觉能力】查看屏幕、分析图片、看图说话。
+   - *例子*: "看看我屏幕上是什么", "帮我读一下这个报错截图".
+5. **search**: 需要联网获取实时信息。
+6. **query_knowledge**: 询问关于项目代码库的问题、报错解决方案、文档内容 (RAG)。
    - *例子*: "ManagerAgent是怎么实现的?", "根据文档解释架构".
-6. **schedule**: 包含具体时间的提醒。
-7. **switch_model**: 切换底层 LLM 模型。
-   - *例子*: "切换到 gemini", "用本地模型", "换回默认模型".
-8. **chat**: 纯闲聊，不涉及操作。
+7. **schedule**: 包含具体时间的提醒。
+8. **switch_model**: 切换底层 LLM 模型。
+   - *例子*: "切换到 vision 模式", "用 smart 模型", "换回默认模型".
+9. **chat**: 纯闲聊，不涉及操作。
 
 ### 输出格式 (JSON)
 {
@@ -252,8 +254,8 @@ class ManagerAgent(BaseAgent):
         elif intent == "switch_model":
             # 提取目标模式名称
             target_model = param.lower()
-            if "gemini" in target_model: target_model = "gemini"
-            elif "local" in target_model or "本地" in target_model: target_model = "local"
+            if "gemini" in target_model or "vision" in target_model: target_model = "vision"
+            elif "smart" in target_model or "高智商" in target_model: target_model = "smart"
             elif "default" in target_model or "默认" in target_model: target_model = "default"
             
             # 自身切换
