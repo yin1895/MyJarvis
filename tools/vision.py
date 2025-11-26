@@ -1,5 +1,5 @@
 # Jarvis V7.0 - Native Vision Tool
-# tools/native_vision.py
+# tools/vision.py
 
 """
 Native LangChain Tool for visual analysis and screen capture.

@@ -1,31 +1,20 @@
-# Jarvis Cortex Protocol - Tools Subsystem
+# Jarvis V7.0 - Core Tools Subsystem
+# core/tools/__init__.py
 
 """
-Tool ecosystem components for the Jarvis Cortex Protocol.
+Base tool abstractions for the Jarvis ecosystem.
 
-Exports:
-- BaseTool: Abstract base class for all tools
-- ToolExecutor: Middleware for safe tool execution
-- ToolRegistry: Dynamic tool discovery and registration
+V7.0 Note:
+- ToolRegistry and ToolExecutor have been deprecated.
+- LangGraph's ToolNode now handles tool execution directly.
+- Only BaseTool and related types are retained for tool backends.
 """
 
 from core.tools.base import BaseTool, RiskLevel, ToolResult, EmptyInput
-from core.tools.executor import ToolExecutor, ConfirmationResult, get_default_executor
-from core.tools.registry import ToolRegistry, get_registry, register_tool, ToolNotFoundError
 
 __all__ = [
-    # Layer 1: Base
     "BaseTool",
-    "RiskLevel", 
+    "RiskLevel",
     "ToolResult",
     "EmptyInput",
-    # Layer 2: Executor
-    "ToolExecutor",
-    "ConfirmationResult",
-    "get_default_executor",
-    # Layer 3: Registry
-    "ToolRegistry",
-    "get_registry",
-    "register_tool",
-    "ToolNotFoundError",
 ]

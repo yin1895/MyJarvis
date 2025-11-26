@@ -1,5 +1,5 @@
 # Jarvis V7.0 - Native File Operation Tool
-# tools/native_file.py
+# tools/file.py
 
 """
 Native LangChain Tool for file operations.

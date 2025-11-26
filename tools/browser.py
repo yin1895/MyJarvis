@@ -1,5 +1,5 @@
 # Jarvis V7.0 - Native Browser Automation Tool
-# tools/native_browser.py
+# tools/browser.py
 
 """
 Native LangChain Tool for browser automation.

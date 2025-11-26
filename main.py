@@ -81,7 +81,7 @@ from core.graph.builder import create_graph, check_tool_calls_safety, get_tool_b
 from core.graph.state import AgentState
 from core.llm_provider import RoleType, LLMFactory
 from services.memory_service import MemoryService
-from tools.native_role import ROLE_SWITCH_MARKER
+from tools.role import ROLE_SWITCH_MARKER
 
 # ==================== 路径配置 ====================
 DATA_DIR = Path(__file__).parent / "data"

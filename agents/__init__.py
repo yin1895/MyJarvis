@@ -1,17 +1,16 @@
-# Jarvis Cortex Protocol - Agents Package
+# Jarvis V7.0 - Agents Package
 # agents/__init__.py
 
 """
 Agent implementations for the Jarvis ecosystem.
 
-This package contains specialized agents for specific task domains.
-The Manager agent orchestrates routing between these agents and tools.
+V7.0 Note:
+- ManagerAgent has been deprecated in favor of LangGraph workflow.
+- Specialized agents (VisionAgent, etc.) are kept as tool backends.
 """
 
 from agents.base import BaseAgent
-from agents.manager import ManagerAgent
 
 __all__ = [
     "BaseAgent",
-    "ManagerAgent",
 ]

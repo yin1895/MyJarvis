@@ -1,5 +1,5 @@
 # Jarvis V7.0 - Native System Control Tool
-# tools/native_system.py
+# tools/system.py
 
 """
 Native LangChain Tool for system control operations.

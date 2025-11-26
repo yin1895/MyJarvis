@@ -1,5 +1,5 @@
 # Jarvis V7.0 - Native Role Switching Tool
-# tools/native_role.py
+# tools/role.py
 
 """
 Native LangChain Tool for switching LLM roles.

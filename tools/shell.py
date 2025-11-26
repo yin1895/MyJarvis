@@ -1,5 +1,5 @@
 # Jarvis V7.0 - Native Shell Execution Tool
-# tools/native_shell.py
+# tools/shell.py
 
 """
 Native LangChain Tool for shell command execution.
