@@ -241,7 +241,11 @@ class ManagerAgent(BaseAgent):
         
         try:
             response = self._call_llm(prompt, temperature=0.1)
-            clean_json = response.replace("```json", "").replace("```", "").strip()
+            # Ensure response is a string
+            if isinstance(response, list):
+                response = str(response[0]) if response else ""
+            response_str = str(response) if response else ""
+            clean_json = response_str.replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_json)
             
             if "thought" in data:
@@ -344,7 +348,11 @@ class ManagerAgent(BaseAgent):
         
         try:
             response = self._call_llm(prompt, temperature=0.1)
-            clean_json = response.replace("```json", "").replace("```", "").strip()
+            # Ensure response is a string
+            if isinstance(response, list):
+                response = str(response[0]) if response else ""
+            response_str = str(response) if response else ""
+            clean_json = response_str.replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_json)
             
             # 验证必要字段
@@ -405,7 +413,11 @@ class ManagerAgent(BaseAgent):
         
         try:
             response = self._call_llm(prompt, temperature=0.1)
-            clean_json = response.replace("```json", "").replace("```", "").strip()
+            # Ensure response is a string
+            if isinstance(response, list):
+                response = str(response[0]) if response else ""
+            response_str = str(response) if response else ""
+            clean_json = response_str.replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_json)
             
             action = data.get("action", "open_app")
@@ -455,7 +467,11 @@ class ManagerAgent(BaseAgent):
         
         try:
             response = self._call_llm(prompt, temperature=0.1)
-            clean_json = response.replace("```json", "").replace("```", "").strip()
+            # Ensure response is a string
+            if isinstance(response, list):
+                response = str(response[0]) if response else ""
+            response_str = str(response) if response else ""
+            clean_json = response_str.replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_json)
             
             result = {"action": data.get("action", "add_reminder")}
@@ -551,6 +567,10 @@ class ManagerAgent(BaseAgent):
                 messages.append({"role": "system", "content": f"【系统执行结果】: {tool_output}\n请根据执行结果回复主人。"})
                 
                 final_reply = self._call_llm(messages)
+                # Ensure final_reply is a string
+                if isinstance(final_reply, list):
+                    final_reply = str(final_reply[0]) if final_reply else ""
+                final_reply = str(final_reply) if final_reply else ""
                 self.history.append({"role": "assistant", "content": final_reply})
                 return final_reply
             
@@ -566,6 +586,10 @@ class ManagerAgent(BaseAgent):
                 messages.append({"role": "system", "content": f"【系统消息】: {cancel_msg}\n请温柔地告诉主人操作已取消。"})
                 
                 final_reply = self._call_llm(messages)
+                # Ensure final_reply is a string
+                if isinstance(final_reply, list):
+                    final_reply = str(final_reply[0]) if final_reply else ""
+                final_reply = str(final_reply) if final_reply else ""
                 self.history.append({"role": "assistant", "content": final_reply})
                 return final_reply
             
@@ -639,6 +663,11 @@ class ManagerAgent(BaseAgent):
             
         # 5. 生成回复
         final_reply = self._call_llm(messages)
+        
+        # Ensure final_reply is a string
+        if isinstance(final_reply, list):
+            final_reply = str(final_reply[0]) if final_reply else ""
+        final_reply = str(final_reply) if final_reply else ""
         
         # 6. 记录助手回复
         self.history.append({"role": "assistant", "content": final_reply})

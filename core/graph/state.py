@@ -1,0 +1,56 @@
+"""
+Agent State Definition for Jarvis V7.0
+
+This module defines the core state structure used throughout the LangGraph
+agent system. The state is immutable and passed between nodes in the graph.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Optional, Any
+from typing_extensions import TypedDict
+
+from langgraph.graph.message import add_messages
+from langchain_core.messages import BaseMessage
+
+
+class AgentState(TypedDict):
+    """
+    Core state for the Jarvis agent graph.
+    
+    This state is passed between all nodes in the graph and represents
+    the current context of the conversation and agent execution.
+    
+    Attributes:
+        messages: The conversation history. Uses `add_messages` reducer
+                  which automatically handles message appending and deduplication.
+        current_role: The active LLM role being used (default, smart, coder, fast, vision)
+        metadata: Optional metadata for the current turn (tool results, context, etc.)
+    
+    The `add_messages` annotation is a LangGraph reducer that:
+    - Appends new messages to the existing list
+    - Handles message ID deduplication
+    - Supports both single messages and lists of messages
+    
+    Example:
+        state = {
+            "messages": [HumanMessage(content="Hello")],
+            "current_role": "default",
+            "metadata": {}
+        }
+    """
+    
+    # Core message history with LangGraph's add_messages reducer
+    # This automatically handles appending and deduplication
+    messages: Annotated[list[BaseMessage], add_messages]
+    
+    # Current LLM role being used (for multi-model support)
+    current_role: Optional[str]
+    
+    # Flexible metadata storage for tool results, intermediate data, etc.
+    metadata: Optional[dict[str, Any]]
+
+
+# Type alias for return values from nodes
+# Nodes can return partial state updates
+NodeOutput = dict[str, Any]

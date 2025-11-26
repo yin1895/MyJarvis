@@ -2,6 +2,18 @@ python-dotenv
 httpx
 requests
 openai
+
+# === LangGraph / LangChain (V7.0 Migration) ===
+langgraph
+langgraph-checkpoint-sqlite
+aiosqlite
+langchain
+langchain-core
+langchain-openai
+langchain-ollama
+langchain-google-genai
+langchain-community
+
 pvporcupine
 pyaudio
 speechrecognition

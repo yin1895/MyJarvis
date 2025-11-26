@@ -421,8 +421,9 @@ class LLMFactory:
         role_config = getattr(Config, "LLM_ROLES", {}).get(role)
         
         if not role_config:
-            # Fallback to legacy MODEL_PRESETS
-            role_config = Config.MODEL_PRESETS.get(role, Config.MODEL_PRESETS.get("default", {}))
+            # Fallback to legacy MODEL_PRESETS (now a classmethod)
+            presets = Config.get_model_presets() if hasattr(Config, 'get_model_presets') else {}
+            role_config = presets.get(role, presets.get("default", {}))
         
         provider_type = role_config.get("provider", "openai")
         
@@ -474,9 +475,9 @@ class LLMFactory:
         if hasattr(Config, "LLM_ROLES"):
             roles.update(Config.LLM_ROLES.keys())
         
-        # From legacy MODEL_PRESETS
-        if hasattr(Config, "MODEL_PRESETS"):
-            roles.update(Config.MODEL_PRESETS.keys())
+        # From legacy MODEL_PRESETS (now a classmethod)
+        if hasattr(Config, "get_model_presets"):
+            roles.update(Config.get_model_presets().keys())
         
         return list(roles)
 

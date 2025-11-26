@@ -1,26 +1,23 @@
 import os
 import hashlib
-import chromadb
 import logging
 import threading
-import torch
-from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
-from pypdf import PdfReader
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
-# 配置日志，防止控制台一片空白
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# 配置日志
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeService:
     """
-    知识库管理服务 (Singleton)
+    知识库管理服务 (Singleton with Lazy Loading)
     
-    使用单例模式确保:
-    1. 整个应用只加载一次 Embedding 模型（节省内存/GPU）
-    2. ChromaDB 客户端只初始化一次
-    3. ManagerAgent 和 KnowledgeTool 共享同一实例
+    特性:
+    1. 单例模式：整个应用只有一个实例
+    2. 懒加载：ChromaDB 和 Embedding 模型在首次使用时才加载
+    3. 线程安全：所有初始化操作都有锁保护
+    
+    好处: Jarvis 秒级启动，1GB+ 模型只在需要时加载
     """
     
     _instance = None
@@ -44,23 +41,46 @@ class KnowledgeService:
             self.persist_directory = os.path.join("data", "vector_db")
             os.makedirs(self.persist_directory, exist_ok=True)
             
-            # 初始化 ChromaDB
-            try:
-                self.client = chromadb.PersistentClient(path=self.persist_directory)
-                # 获取或创建集合
-                self.collection = self.client.get_or_create_collection(name="jarvis_knowledge")
-            except Exception as e:
-                logging.error(f"ChromaDB init failed: {e}")
-                raise e
-            
-            # 初始化 Embedding 模型
-            logging.info("Loading embedding model (all-MiniLM-L6-v2)...")
-
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.model = SentenceTransformer("all-MiniLM-L6-v2") 
-            logging.info("Embedding model loaded.")
+            # 懒加载占位符 - 不在初始化时加载重型依赖
+            self._client: Optional[Any] = None
+            self._collection: Optional[Any] = None
+            self._model: Optional[Any] = None
             
             self._initialized = True
+            logger.debug("KnowledgeService initialized (lazy mode)")
+    
+    @property
+    def client(self):
+        """Lazy load ChromaDB client on first access."""
+        if self._client is None:
+            with self._lock:
+                if self._client is None:
+                    import chromadb
+                    logger.info("Loading ChromaDB client...")
+                    self._client = chromadb.PersistentClient(path=self.persist_directory)
+                    logger.info("ChromaDB client loaded.")
+        return self._client
+    
+    @property
+    def collection(self):
+        """Lazy load ChromaDB collection on first access."""
+        if self._collection is None:
+            with self._lock:
+                if self._collection is None:
+                    self._collection = self.client.get_or_create_collection(name="jarvis_knowledge")
+        return self._collection
+    
+    @property
+    def model(self):
+        """Lazy load SentenceTransformer model on first access."""
+        if self._model is None:
+            with self._lock:
+                if self._model is None:
+                    logger.info("Loading embedding model (all-MiniLM-L6-v2)... This may take a moment.")
+                    from sentence_transformers import SentenceTransformer
+                    self._model = SentenceTransformer("all-MiniLM-L6-v2")
+                    logger.info("Embedding model loaded.")
+        return self._model
 
     def _calculate_hash(self, file_path):
         """计算文件的 MD5"""
@@ -80,6 +100,7 @@ class KnowledgeService:
         
         try:
             if ext == ".pdf":
+                from pypdf import PdfReader
                 reader = PdfReader(file_path)
                 for page in reader.pages:
                     extract = page.extract_text()
@@ -94,7 +115,7 @@ class KnowledgeService:
                     with open(file_path, "r", encoding="gbk") as f:
                         content = f.read()
         except Exception as e:
-            logging.error(f"Error reading file {file_path}: {e}")
+            logger.error(f"Error reading file {file_path}: {e}")
             return None
             
         return content
@@ -120,10 +141,10 @@ class KnowledgeService:
         if existing and existing['metadatas']:
             stored_hash = existing['metadatas'][0].get('hash')
             if stored_hash == file_hash:
-                logging.info(f"File skipped (unchanged): {file_path}")
+                logger.info(f"File skipped (unchanged): {file_path}")
                 return "文件未变更，已跳过。"
             else:
-                logging.info(f"File changed, re-indexing: {file_path}")
+                logger.info(f"File changed, re-indexing: {file_path}")
                 # 只有内容变了才删除旧的
                 self.collection.delete(where={"source": file_path})
 
@@ -146,7 +167,7 @@ class KnowledgeService:
 
         # 5. Embedding
         # 这一步最耗时，打印日志提示用户
-        logging.info(f"Embedding {len(chunks)} chunks for {file_path}...")
+        logger.info(f"Embedding {len(chunks)} chunks for {file_path}...")
         embeddings = self.model.encode(chunks).tolist()
 
         # 6. 存储

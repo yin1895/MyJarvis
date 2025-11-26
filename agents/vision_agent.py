@@ -1,44 +1,50 @@
 import base64
 import io
-import pyautogui
-from PIL import Image
+import logging
+
 from agents.base import BaseAgent
-from core.llm import LLMFactory
 from typing import Any, cast
+
+logger = logging.getLogger(__name__)
+
+# 尝试导入新版 LLMFactory
+try:
+    from core.llm_provider import LLMFactory as NewLLMFactory, RoleType
+    HAS_NEW_FACTORY = True
+except ImportError:
+    HAS_NEW_FACTORY = False
+    NewLLMFactory = None
 
 
 class VisionAgent(BaseAgent):
     """
     Vision Agent for screen analysis.
     
-    V6.1 Refactor:
-    - Uses LLMFactory.get_model("vision") for unified config management
-    - Falls back to BaseAgent.client for backward compatibility
+    V7.0 Refactor:
+    - 使用 core.llm_provider.LLMFactory 创建视觉模型
+    - 支持 Gemini 多模态 API
+    - 向后兼容 OpenAI 兼容 API
     """
     
     def __init__(self):
-        # Initialize BaseAgent, which handles model loading based on AGENT_MODEL_MAP
-        # It will automatically load the "vision" role configuration
         super().__init__(name="VisionAgent")
+        self._use_langchain = HAS_NEW_FACTORY
         
-        # 初始化 LLMFactory 的 vision provider
-        self._vision_provider = None
-        self._use_factory = False
-        
-        try:
-            self._vision_provider = LLMFactory.get_model("vision")
-            self._use_factory = True
-            print(f"[{self.name}] Using LLMFactory: {self._vision_provider.model_name}")
-        except Exception as e:
-            print(f"[{self.name}] LLMFactory unavailable, using BaseAgent client: {e}")
+        if self._use_langchain:
+            logger.info(f"[{self.name}] Using LangChain LLMFactory for vision")
+        else:
+            logger.info(f"[{self.name}] Using legacy OpenAI client")
 
     def _take_screenshot(self) -> str:
         """截取屏幕并转换为 Base64 字符串"""
         try:
-            # 1. 截图
+            import pyautogui
+            from PIL import Image
+            
+            # 截图
             screenshot = pyautogui.screenshot()
             
-            # 2. 调整大小 (最大边长 1024，保持比例，加快 Gemini 处理)
+            # 调整大小 (最大边长 1024，加快处理)
             max_size = 1024
             width, height = screenshot.size
             if width > max_size or height > max_size:
@@ -46,30 +52,30 @@ class VisionAgent(BaseAgent):
                 new_size = (int(width * ratio), int(height * ratio))
                 screenshot = screenshot.resize(new_size, Image.Resampling.LANCZOS)
             
-            # 3. 转为 JPEG 字节流
+            # 转为 JPEG 字节流
             buffer = io.BytesIO()
             screenshot.save(buffer, format="JPEG", quality=80)
             image_bytes = buffer.getvalue()
             
-            # 4. 转为 Base64
+            # 转为 Base64
             base64_str = base64.b64encode(image_bytes).decode('utf-8')
             return base64_str
             
         except Exception as e:
-            print(f"[VisionAgent] 截图失败: {e}")
+            logger.error(f"[VisionAgent] 截图失败: {e}")
             return ""
 
     def run(self, user_input: str) -> str:
         """执行视觉分析任务"""
-        print("[VisionAgent]: 正在截取屏幕...", flush=True)
+        logger.info("[VisionAgent]: 正在截取屏幕...")
         base64_image = self._take_screenshot()
         
         if not base64_image:
             return "抱歉，我无法截取屏幕画面，请检查权限。"
 
-        print(f"[VisionAgent]: 正在请求 Vision Model ({self.model_name}) 分析...", flush=True)
+        logger.info(f"[VisionAgent]: 正在请求 Vision Model 分析...")
         
-        # 构建多模态消息 (OpenAI 兼容格式)
+        # 构建多模态消息 (OpenAI/Gemini 兼容格式)
         user_content = [
             {"type": "text", "text": f"这是我当前屏幕的截图。用户指令: {user_input}。请分析图片并直接回答用户指令，不要啰嗦。"},
             {
@@ -79,14 +85,24 @@ class VisionAgent(BaseAgent):
         ]
 
         try:
-            # 优先使用 LLMFactory (统一配置管理)
-            if self._use_factory and self._vision_provider:
-                # LLMFactory providers 使用 chat() 方法
-                messages = [{"role": "user", "content": user_content}]
-                response_text = self._vision_provider.chat(messages, temperature=0.7)
-                return response_text or "我看完了，但好像没法描述它。"
-            else:
-                # 回退到 BaseAgent 的 OpenAI client
+            # V7.0: 使用 LangChain LLMFactory
+            if self._use_langchain and NewLLMFactory:
+                from langchain_core.messages import HumanMessage
+                
+                llm = NewLLMFactory.create(cast(RoleType, "vision"))
+                
+                message = HumanMessage(content=user_content)
+                response = llm.invoke([message])
+                
+                if hasattr(response, 'content'):
+                    content = response.content
+                    if isinstance(content, list):
+                        return " ".join(str(c) for c in content)
+                    return str(content)
+                return str(response)
+            
+            # 回退: 使用 BaseAgent 的 OpenAI client
+            elif self.client:
                 messages = [{"role": "user", "content": user_content}]
                 response = self.client.chat.completions.create(
                     model=self.model_name,
@@ -95,7 +111,10 @@ class VisionAgent(BaseAgent):
                 )
                 return response.choices[0].message.content or "我看完了，但好像没法描述它。"
             
+            else:
+                return "视觉模型未配置。请在 .env 中设置 VISION_LLM_API_KEY。"
+            
         except Exception as e:
-            print(f"[VisionAgent Error]: {e}")
+            logger.error(f"[VisionAgent Error]: {e}")
             return f"视觉分析出错了: {e}"
 

@@ -1,6 +1,9 @@
 import json
 import os
+import logging
 import threading
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryService:
@@ -53,11 +56,13 @@ class MemoryService:
             return {"name": "Master", "preferences": {}, "notes": []}
 
     def save_profile(self):
-        try:
-            with open(self.file_path, "w", encoding="utf-8") as f:
-                json.dump(self.profile, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[Memory Error] Save failed: {e}")
+        """Thread-safe save profile to disk."""
+        with self._lock:
+            try:
+                with open(self.file_path, "w", encoding="utf-8") as f:
+                    json.dump(self.profile, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"[Memory Error] Save failed: {e}")
 
     def update_profile(self, key, value):
         """更新根字段或 preferences"""
