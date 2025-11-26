@@ -435,10 +435,11 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
         # Windows 下信号处理由 KeyboardInterrupt 异常处理
         pass
     
-    checkpointer = None
+    checkpointer_cm = None  # Context manager
+    checkpointer = None     # Actual saver instance
     try:
-        checkpointer = AsyncSqliteSaver.from_conn_string(str(STATE_DB_PATH))
-        await checkpointer.__aenter__()
+        checkpointer_cm = AsyncSqliteSaver.from_conn_string(str(STATE_DB_PATH))
+        checkpointer = await checkpointer_cm.__aenter__()
         # Create graph
         graph = create_graph(
             role=current_role,
@@ -693,10 +694,10 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
     
     finally:
         # 优雅关闭 checkpointer，避免 "Event loop is closed" 错误
-        if checkpointer:
+        if checkpointer_cm:
             try:
                 console.print("[dim]正在保存会话状态...[/dim]")
-                await checkpointer.__aexit__(None, None, None)
+                await checkpointer_cm.__aexit__(None, None, None)
             except Exception as e:
                 logger.debug(f"Checkpointer cleanup: {e}")
 
