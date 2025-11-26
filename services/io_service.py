@@ -5,8 +5,9 @@ import tempfile
 import struct
 import winsound
 import wave
+import time
 from collections import deque
-from typing import Any, cast
+from typing import Any, Optional, cast
 import numpy as np
 import torch
 import pvporcupine
@@ -15,6 +16,30 @@ import pygame
 import edge_tts
 from faster_whisper import WhisperModel
 from config import Config
+
+# ==================== 共享 PyAudio 实例 ====================
+# 解决 Windows 上频繁创建/销毁 PyAudio 导致的 [Errno -9999] 错误
+_SHARED_PA: Optional[pyaudio.PyAudio] = None
+_PA_LOCK = False  # 简单锁，防止并发问题
+
+
+def get_shared_pyaudio() -> pyaudio.PyAudio:
+    """获取共享的 PyAudio 实例，避免频繁初始化导致的音频驱动错误"""
+    global _SHARED_PA
+    if _SHARED_PA is None:
+        _SHARED_PA = pyaudio.PyAudio()
+    return _SHARED_PA
+
+
+def close_shared_pyaudio() -> None:
+    """关闭共享的 PyAudio 实例（仅在程序退出时调用）"""
+    global _SHARED_PA
+    if _SHARED_PA is not None:
+        try:
+            _SHARED_PA.terminate()
+        except:
+            pass
+        _SHARED_PA = None
 
 class AudioHandler:
     def __init__(self):
@@ -64,6 +89,23 @@ class AudioHandler:
         communicate = edge_tts.Communicate(text, self.voice, rate="+20%")
         await communicate.save(self.output_file)
 
+    def _run_async(self, coro):
+        """安全地运行异步协程，兼容已有事件循环的情况"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        
+        if loop and loop.is_running():
+            # 已经在事件循环中，使用 nest_asyncio 或创建新线程
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, coro)
+                return future.result()
+        else:
+            # 没有运行中的事件循环，直接使用 asyncio.run
+            return asyncio.run(coro)
+
     def speak(self, text, interrupt_check_callback=None):
         # 这里的 print 可以保留用于调试，或者注释掉
         # print(f"[Alice]: {text}", flush=True) 
@@ -78,7 +120,7 @@ class AudioHandler:
             except: pass
 
         try:
-            asyncio.run(self._generate_audio(text))
+            self._run_async(self._generate_audio(text))
             if not os.path.exists(self.output_file): return
 
             pygame.mixer.music.load(self.output_file)
@@ -122,7 +164,7 @@ class AudioHandler:
         PRE_RECORD_SECONDS = 0.3 # 前摇缓冲 (秒)
         MAX_RECORD_SECONDS = 30 # 最大录音时长
         
-        pa = pyaudio.PyAudio()
+        pa = get_shared_pyaudio()
         stream = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
         
         print("\n[Alice]: 聆听中... (请吩咐)", flush=True)
@@ -184,7 +226,7 @@ class AudioHandler:
         finally:
             stream.stop_stream()
             stream.close()
-            pa.terminate()
+            # 注意：不再 terminate pa，使用共享实例
             
         if not frames:
             return ""
@@ -228,6 +270,9 @@ class AudioHandler:
         if os.path.exists(self.output_file):
             try: os.remove(self.output_file)
             except: pass
+        
+        # 关闭共享的 PyAudio 实例
+        close_shared_pyaudio()
 
 class WakeWord:
     def __init__(self):
@@ -249,10 +294,13 @@ class WakeWord:
         if not self.porcupine: return False
         if self.stream: return True # 已经开启
 
+        self.pa = get_shared_pyaudio()
+        target_rate = self.porcupine.sample_rate
+        
+        # 首先尝试默认设备
         try:
-            self.pa = pyaudio.PyAudio()
             self.stream = self.pa.open(
-                rate=self.porcupine.sample_rate,
+                rate=target_rate,
                 channels=1,
                 format=pyaudio.paInt16,
                 input=True,
@@ -260,19 +308,57 @@ class WakeWord:
             )
             return True
         except Exception as e:
-            print(f"[WakeWord Start Error]: {e}")
-            return False
+            print(f"[WakeWord] 默认麦克风打开失败: {e}")
+        
+        # 尝试遍历所有输入设备找到可用的
+        print("[WakeWord] 正在搜索可用麦克风...")
+        device_count = self.pa.get_device_count()
+        
+        for idx in range(device_count):
+            try:
+                info = self.pa.get_device_info_by_index(idx)
+                # 跳过非输入设备
+                max_input = info.get('maxInputChannels', 0)
+                if not isinstance(max_input, (int, float)) or max_input <= 0:
+                    continue
+                # 优先选择非蓝牙设备（名称中不含 Hands-Free 或 AirPods 等）
+                name = str(info.get('name', ''))
+                if 'Hands-Free' in name or 'bluetooth' in name.lower():
+                    continue
+                    
+                self.stream = self.pa.open(
+                    rate=target_rate,
+                    channels=1,
+                    format=pyaudio.paInt16,
+                    input=True,
+                    input_device_index=idx,
+                    frames_per_buffer=self.porcupine.frame_length
+                )
+                print(f"[WakeWord] 使用麦克风: [{idx}] {name}")
+                return True
+            except:
+                continue
+        
+        # 所有设备都失败，打印诊断信息
+        print("[WakeWord Error] 无法打开任何麦克风设备！")
+        print("可能原因:")
+        print("  1. Windows 隐私设置禁止了麦克风访问")
+        print("     → 设置 > 隐私 > 麦克风 > 允许桌面应用访问麦克风")
+        print("  2. 其他程序独占了麦克风 (Teams, Discord, 等)")
+        print("  3. 麦克风已被禁用")
+        print("     → 右键任务栏喇叭图标 > 声音 > 录制 > 检查麦克风状态")
+        return False
 
     def stop(self):
         """关闭麦克风流"""
         if self.stream:
-            try: self.stream.close()
+            try: 
+                self.stream.stop_stream()
+                self.stream.close()
             except: pass
             self.stream = None
-        if self.pa:
-            try: self.pa.terminate()
-            except: pass
-            self.pa = None
+        # 注意：不再 terminate pa，使用共享实例
+        self.pa = None
 
     def process_frame(self):
         """处理一帧音频，检测唤醒词"""

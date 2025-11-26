@@ -87,6 +87,9 @@ from tools.native_role import ROLE_SWITCH_MARKER
 DATA_DIR = Path(__file__).parent / "data"
 STATE_DB_PATH = DATA_DIR / "state.db"
 
+# 优雅关闭标志
+_shutdown_event: Optional[asyncio.Event] = None
+
 
 def ensure_data_dir() -> None:
     """Ensure the data directory exists."""
@@ -411,9 +414,31 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
     This function is extracted to properly use async context manager
     for the AsyncSqliteSaver checkpointer.
     """
+    global _shutdown_event
+    _shutdown_event = asyncio.Event()
     current_role = args.role  # Track current role for dynamic switching
     
-    async with AsyncSqliteSaver.from_conn_string(str(STATE_DB_PATH)) as checkpointer:
+    # 设置信号处理器以便优雅关闭
+    loop = asyncio.get_running_loop()
+    
+    def signal_handler():
+        console.print("\n[warning]收到退出信号，正在优雅关闭...[/warning]")
+        if _shutdown_event:
+            _shutdown_event.set()
+    
+    # Windows 不支持 add_signal_handler，使用 try-except
+    try:
+        import signal
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, signal_handler)
+    except (NotImplementedError, ValueError):
+        # Windows 下信号处理由 KeyboardInterrupt 异常处理
+        pass
+    
+    checkpointer = None
+    try:
+        checkpointer = AsyncSqliteSaver.from_conn_string(str(STATE_DB_PATH))
+        await checkpointer.__aenter__()
         # Create graph
         graph = create_graph(
             role=current_role,
@@ -439,10 +464,14 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
             # ==================== 文字模式循环 ====================
             console.print("[info]提示: 输入指令，'exit' 退出，'clear' 清空会话[/info]")
             
-            while True:
+            while not (_shutdown_event and _shutdown_event.is_set()):
                 try:
                     console.print("\n[user][主人]: [/user]", end="")
-                    user_input = input().strip()
+                    try:
+                        user_input = input().strip()
+                    except EOFError:
+                        # 管道输入结束或 stdin 关闭
+                        break
                     
                     if not user_input:
                         continue
@@ -557,7 +586,7 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
                     listen_func=ear_mouth.listen,
                 )
             
-            while True:
+            while not (_shutdown_event and _shutdown_event.is_set()):
                 try:
                     # Wait for wake word
                     if wake_word is None or not wake_word.listen():
@@ -661,6 +690,15 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
                     console.print(f"[error]错误: {e}[/error]")
                     logger.exception("Error in voice loop")
                     continue
+    
+    finally:
+        # 优雅关闭 checkpointer，避免 "Event loop is closed" 错误
+        if checkpointer:
+            try:
+                console.print("[dim]正在保存会话状态...[/dim]")
+                await checkpointer.__aexit__(None, None, None)
+            except Exception as e:
+                logger.debug(f"Checkpointer cleanup: {e}")
 
 
 if __name__ == "__main__":

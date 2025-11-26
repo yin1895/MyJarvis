@@ -48,10 +48,13 @@ class WebSurferAgent(BaseAgent):
     def _init_langchain_llm(self):
         """初始化 LangChain ChatOpenAI 对象供 browser-use 使用"""
         # 使用 BaseAgent 已加载的配置
-        preset = Config.MODEL_PRESETS.get(
-            Config.AGENT_MODEL_MAP.get(self.__class__.__name__, "default"),
-            Config.MODEL_PRESETS.get("default", {})
-        )
+        presets = getattr(Config, 'MODEL_PRESETS', {})
+        if callable(presets):
+            presets = Config.get_model_presets()
+        
+        agent_map = getattr(Config, 'AGENT_MODEL_MAP', {})
+        preset_key = agent_map.get(self.__class__.__name__, "default")
+        preset = presets.get(preset_key, presets.get("default", {}))
         
         try:
             self.llm = ChatOpenAI(
@@ -121,7 +124,10 @@ class WebSurferAgent(BaseAgent):
             return False
             
         # 2. 获取新配置
-        preset = Config.MODEL_PRESETS.get(preset_name)
+        presets = getattr(Config, 'MODEL_PRESETS', {})
+        if callable(presets):
+            presets = Config.get_model_presets()
+        preset = presets.get(preset_name)
         if not preset:
             return False
         

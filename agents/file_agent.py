@@ -103,7 +103,11 @@ class FileAgent(BaseAgent):
 
         try:
             response = self._call_llm(prompt, temperature=0.1)
-            clean_json = response.replace("```json", "").replace("```", "").strip()
+            # 确保 response 是字符串
+            if isinstance(response, list):
+                response = str(response[0]) if response else ""
+            response_str = str(response)
+            clean_json = response_str.replace("```json", "").replace("```", "").strip()
             cmd = json.loads(clean_json)
             
             op = cmd.get("op")

@@ -89,7 +89,7 @@ class VisionAgent(BaseAgent):
             if self._use_langchain and NewLLMFactory:
                 from langchain_core.messages import HumanMessage
                 
-                llm = NewLLMFactory.create(cast(RoleType, "vision"))
+                llm = NewLLMFactory.create("vision")
                 
                 message = HumanMessage(content=user_content)
                 response = llm.invoke([message])
