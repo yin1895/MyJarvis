@@ -2,7 +2,11 @@ import os
 import hashlib
 import logging
 import threading
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import chromadb
+    from chromadb.api.models.Collection import Collection
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -62,13 +66,13 @@ class KnowledgeService:
         return self._client
     
     @property
-    def collection(self):
+    def collection(self) -> "Collection":
         """Lazy load ChromaDB collection on first access."""
         if self._collection is None:
             with self._lock:
                 if self._collection is None:
                     self._collection = self.client.get_or_create_collection(name="jarvis_knowledge")
-        return self._collection
+        return self._collection  # type: ignore[return-value]
     
     @property
     def model(self):
@@ -174,13 +178,13 @@ class KnowledgeService:
         # ID 格式: hash_索引
         ids = [f"{file_hash}_{i}" for i in range(len(chunks))]
 
-        metadatas: List[Dict[str, Any]] = [{"source": file_path, "hash": file_hash} for _ in chunks]
+        metadatas = [{"source": file_path, "hash": file_hash} for _ in chunks]
 
         self.collection.add(
             ids=ids,
             embeddings=embeddings,
             documents=chunks,
-            metadatas=metadatas
+            metadatas=metadatas  # type: ignore[arg-type]
         )
         
         return f"成功学习文件：{os.path.basename(file_path)}，共 {len(chunks)} 个知识片段。"
