@@ -19,17 +19,61 @@ class Config:
     """Jarvis 统一配置类"""
     
     # =========================================
-    # 🎭 人格 Prompt 配置 (Personality Prompt)
+    # 🎭 人格配置系统 (Personality System)
     # =========================================
-    # 自定义 Jarvis 的人格特征，影响对话风格和行为
-    PERSONALITY_PROMPT = os.getenv("JARVIS_PERSONALITY", """你是 Jarvis，一个智能 AI 助手。你友好、有帮助，并且能够协助用户完成各种任务。
-
-你的特点：
-- 简洁明了地回答问题
-- 在需要时提供详细的解释
-- 保持友好和专业的态度
-- 使用中文与用户交流（除非用户使用其他语言）
-""")
+    # 支持语音/文字模式的差异化人格，以及角色特定的行为约束
+    
+    PERSONALITY = {
+        # 基础人格（所有模式共享）
+        "base": {
+            "name": os.getenv("JARVIS_ASSISTANT_NAME", "Jarvis"),
+            "trait": "简洁、专业、友好",
+            "language": "中文",
+        },
+        
+        # 语音模式约束（被朗读出来，必须简洁口语化）
+        "voice_mode": {
+            "style": "极度简洁，1-2句话解决问题，像朋友聊天",
+            "rules": [
+                "不要长篇大论，用户在听不是在看",
+                "不要使用 markdown、列表、代码块",
+                "不要分析过程，直接给结果",
+                "不要反问，除非真的需要澄清",
+            ],
+            "example_bad": "我看到您的屏幕上显示的是一个代码编辑器，可能是 VS Code，并且您刚刚执行了一个切换模型的操作...",
+            "example_good": "屏幕上是 VS Code，打开了 main.py。",
+        },
+        
+        # 文字模式约束（可以适当详细）
+        "text_mode": {
+            "style": "清晰准确，可以适当详细，支持 markdown",
+            "rules": [
+                "可以使用格式化提高可读性",
+                "复杂问题可以分步骤解释",
+            ],
+        },
+        
+        # 角色特定人格补充
+        "roles": {
+            "default": "平衡通用，日常对话和任务执行",
+            "smart": "深度思考，但仍保持简洁，适合复杂推理",
+            "coder": "技术精准，代码优先，少废话",
+            "vision": "描述所见即可，不要过度分析和推测",
+            "fast": "极速响应，一句话搞定",
+        },
+    }
+    
+    # 兼容旧版：保留 PERSONALITY_PROMPT（从新配置生成）
+    @classmethod
+    def get_personality_prompt(cls) -> str:
+        """获取基础人格 Prompt（兼容旧代码）"""
+        base = cls.PERSONALITY.get("base", {})
+        return f"""你是 {base.get('name', 'Jarvis')}，一个智能 AI 助手。
+你的特点：{base.get('trait', '简洁、专业、友好')}
+使用{base.get('language', '中文')}与用户交流。"""
+    
+    # 保持向后兼容
+    PERSONALITY_PROMPT = property(lambda self: Config.get_personality_prompt())
     
     # 用户自定义名称（用于个性化称呼）
     USER_NAME = os.getenv("JARVIS_USER_NAME", "主人")
@@ -116,33 +160,25 @@ class Config:
     }
     
     # =========================================
-    # 🔧 兼容性配置 (Legacy - 将在未来版本移除)
+    # ⚙️ 运行时参数 (Runtime Settings)
     # =========================================
-    # MODEL_PRESETS: 为旧版 BaseAgent 提供兼容
-    # 新代码请使用 LLM_ROLES
+    # 集中管理各模块的阈值和超时，避免硬编码
     
-    @classmethod
-    def get_model_presets(cls) -> dict:
-        """生成兼容旧版的 MODEL_PRESETS（从 LLM_ROLES 派生）"""
-        return {
-            role: {
-                "api_key": config.get("api_key"),
-                "base_url": config.get("base_url") or config.get("host"),
-                "model": config.get("model"),
-            }
-            for role, config in cls.LLM_ROLES.items()
-        }
+    # 浏览器自动化
+    BROWSER_TASK_TIMEOUT = int(os.getenv("BROWSER_TASK_TIMEOUT", "120"))  # 秒
     
-    # 动态属性：兼容旧代码
-    MODEL_PRESETS = property(lambda self: Config.get_model_presets())
+    # 知识库 RAG
+    KNOWLEDGE_CHUNK_SIZE = int(os.getenv("KNOWLEDGE_CHUNK_SIZE", "500"))  # 字符
+    KNOWLEDGE_CHUNK_OVERLAP = int(os.getenv("KNOWLEDGE_CHUNK_OVERLAP", "50"))  # 字符
+    KNOWLEDGE_MAX_RESULTS = int(os.getenv("KNOWLEDGE_MAX_RESULTS", "5"))  # 条
     
-    # Agent 路由映射 (兼容旧版 BaseAgent)
-    AGENT_MODEL_MAP = {
-        "PythonAgent": "smart",
-        "VisionAgent": "vision",
-        "WebSurferAgent": "vision"
-    }
-
+    # 语音识别 VAD
+    VAD_PAUSE_THRESHOLD = float(os.getenv("VAD_PAUSE_THRESHOLD", "0.8"))  # 秒
+    VAD_MAX_RECORD_SECONDS = int(os.getenv("VAD_MAX_RECORD_SECONDS", "30"))  # 秒
+    
+    # 对话历史
+    MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "30"))  # 条，防止 context 溢出
+    
     @staticmethod
     def get_proxy_config():
         """获取 httpx 兼容的代理配置字典"""

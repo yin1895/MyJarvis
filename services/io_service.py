@@ -31,13 +31,13 @@ def get_shared_pyaudio() -> pyaudio.PyAudio:
     return _SHARED_PA
 
 
-def close_shared_pyaudio() -> None:
+def close_shared_pyaudio():
     """关闭共享的 PyAudio 实例（仅在程序退出时调用）"""
     global _SHARED_PA
     if _SHARED_PA is not None:
         try:
             _SHARED_PA.terminate()
-        except:
+        except Exception:
             pass
         _SHARED_PA = None
 
@@ -83,7 +83,7 @@ class AudioHandler:
 
     def play_ding(self):
         try: winsound.Beep(1000, 200)
-        except: pass
+        except Exception: pass
 
     async def _generate_audio(self, text):
         communicate = edge_tts.Communicate(text, self.voice, rate="+20%")
@@ -113,11 +113,11 @@ class AudioHandler:
         try:
             if pygame.mixer.music.get_busy(): pygame.mixer.music.stop()
             pygame.mixer.music.unload()
-        except: pass
+        except Exception: pass
 
         if os.path.exists(self.output_file):
             try: os.remove(self.output_file)
-            except: pass
+            except Exception: pass
 
         try:
             self._run_async(self._generate_audio(text))
@@ -142,7 +142,7 @@ class AudioHandler:
                     pygame.time.Clock().tick(30)
             
             try: pygame.mixer.music.unload()
-            except: pass
+            except Exception: pass
             return False
 
         except Exception as e:
@@ -160,9 +160,10 @@ class AudioHandler:
         RATE = 16000
         CHUNK = 512
         
-        PAUSE_THRESHOLD = 0.8 # 静音阈值 (秒)
-        PRE_RECORD_SECONDS = 0.3 # 前摇缓冲 (秒)
-        MAX_RECORD_SECONDS = 30 # 最大录音时长
+        from config import Config
+        PAUSE_THRESHOLD = Config.VAD_PAUSE_THRESHOLD  # 静音阈值 (秒)
+        PRE_RECORD_SECONDS = 0.3  # 前摇缓冲 (秒)
+        MAX_RECORD_SECONDS = Config.VAD_MAX_RECORD_SECONDS  # 最大录音时长
         
         pa = get_shared_pyaudio()
         stream = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
@@ -256,7 +257,7 @@ class AudioHandler:
         finally:
             if fname and os.path.exists(fname):
                 try: os.unlink(fname)
-                except: pass
+                except Exception: pass
                 
         return text
 
@@ -265,11 +266,11 @@ class AudioHandler:
             pygame.mixer.music.stop()
             pygame.mixer.quit()
             pygame.quit() # 彻底退出
-        except: pass
+        except Exception: pass
         
         if os.path.exists(self.output_file):
             try: os.remove(self.output_file)
-            except: pass
+            except Exception: pass
         
         # 关闭共享的 PyAudio 实例
         close_shared_pyaudio()
@@ -336,7 +337,7 @@ class WakeWord:
                 )
                 print(f"[WakeWord] 使用麦克风: [{idx}] {name}")
                 return True
-            except:
+            except Exception:
                 continue
         
         # 所有设备都失败，打印诊断信息
@@ -355,7 +356,7 @@ class WakeWord:
             try: 
                 self.stream.stop_stream()
                 self.stream.close()
-            except: pass
+            except Exception: pass
             self.stream = None
         # 注意：不再 terminate pa，使用共享实例
         self.pa = None

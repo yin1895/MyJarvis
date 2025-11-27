@@ -7,11 +7,15 @@ agent system. The state is immutable and passed between nodes in the graph.
 
 from __future__ import annotations
 
-from typing import Annotated, Optional, Any
+from typing import Annotated, Optional, Any, Literal
 from typing_extensions import TypedDict
 
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
+
+
+# 交互模式类型
+InteractionMode = Literal["voice", "text"]
 
 
 class AgentState(TypedDict):
@@ -25,6 +29,7 @@ class AgentState(TypedDict):
         messages: The conversation history. Uses `add_messages` reducer
                   which automatically handles message appending and deduplication.
         current_role: The active LLM role being used (default, smart, coder, fast, vision)
+        interaction_mode: Current interaction mode ("voice" or "text")
         metadata: Optional metadata for the current turn (tool results, context, etc.)
     
     The `add_messages` annotation is a LangGraph reducer that:
@@ -36,6 +41,7 @@ class AgentState(TypedDict):
         state = {
             "messages": [HumanMessage(content="Hello")],
             "current_role": "default",
+            "interaction_mode": "voice",
             "metadata": {}
         }
     """
@@ -46,6 +52,9 @@ class AgentState(TypedDict):
     
     # Current LLM role being used (for multi-model support)
     current_role: Optional[str]
+    
+    # 交互模式：voice(语音) 或 text(文字)，影响 system prompt 生成
+    interaction_mode: Optional[InteractionMode]
     
     # Flexible metadata storage for tool results, intermediate data, etc.
     metadata: Optional[dict[str, Any]]

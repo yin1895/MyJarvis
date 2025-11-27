@@ -239,3 +239,42 @@ def get_llm(role: RoleType = "default", **kwargs) -> BaseChatModel:
         A configured BaseChatModel instance
     """
     return LLMFactory.create(role, **kwargs)
+
+
+def get_model_name(llm: BaseChatModel) -> str:
+    """
+    统一获取 LangChain LLM 实例的模型名称。
+    
+    不同 Provider 的模型名称属性不一致：
+    - ChatOpenAI: model_name
+    - ChatOllama: model
+    - ChatGoogleGenerativeAI: model
+    - ChatAnthropic: model
+    
+    此函数统一处理这些差异，供全项目复用。
+    
+    Args:
+        llm: LangChain BaseChatModel 实例
+        
+    Returns:
+        模型名称字符串，如果无法获取则返回 'unknown'
+    """
+    # 优先尝试 model_name（ChatOpenAI 使用）
+    model_name = getattr(llm, 'model_name', None)
+    if model_name:
+        return str(model_name)
+    
+    # 其次尝试 model（Gemini, Ollama, Anthropic 使用）
+    model = getattr(llm, 'model', None)
+    if model:
+        return str(model)
+    
+    # 最后尝试从 _identifying_params 获取
+    try:
+        params = llm._identifying_params
+        if isinstance(params, dict):
+            return str(params.get('model_name', params.get('model', 'unknown')))
+    except Exception:
+        pass
+    
+    return 'unknown'

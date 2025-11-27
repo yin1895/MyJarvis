@@ -158,8 +158,9 @@ class KnowledgeService:
             return "无法读取文件内容或内容为空"
 
         # 4. 切片 (Chunking) - 简单滑动窗口
-        chunk_size = 500
-        overlap = 50
+        from config import Config
+        chunk_size = Config.KNOWLEDGE_CHUNK_SIZE
+        overlap = Config.KNOWLEDGE_CHUNK_OVERLAP
         chunks = []
         for i in range(0, len(text), chunk_size - overlap):
             chunk = text[i:i + chunk_size]

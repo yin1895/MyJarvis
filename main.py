@@ -33,12 +33,12 @@ reconfigure = getattr(sys.stdout, "reconfigure", None)
 if callable(reconfigure):
     try:
         reconfigure(encoding='utf-8', line_buffering=True)
-    except:
+    except Exception:
         pass
 else:
     try:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
-    except:
+    except Exception:
         pass
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
@@ -202,6 +202,7 @@ async def run_graph_with_safety(
     messages: list[BaseMessage],
     thread_config: RunnableConfig,
     role: str = "default",
+    interaction_mode: str = "text",
     auto_approve_safe: bool = True,
     confirm_func: Optional[Callable[[list], bool]] = None,
 ) -> tuple[str, list[BaseMessage]]:
@@ -213,18 +214,23 @@ async def run_graph_with_safety(
         messages: Current message history
         thread_config: Thread configuration for checkpointing
         role: LLM role
+        interaction_mode: "voice" 或 "text"，影响 system prompt 生成
         auto_approve_safe: Whether to auto-approve safe tools
         confirm_func: Function to call for dangerous tool confirmation
         
     Returns:
         Tuple of (response_text, updated_messages)
     """
+    from core.graph.state import InteractionMode
     full_response = ""
     
-    # Build initial state
+    # Build initial state with interaction_mode
+    # Cast interaction_mode to Literal type
+    mode: InteractionMode = "voice" if interaction_mode == "voice" else "text"
     state: AgentState = {
         "messages": messages.copy(),
         "current_role": role,
+        "interaction_mode": mode,
         "metadata": {}
     }
     
@@ -391,17 +397,17 @@ def main():
             try:
                 if scheduler:
                     scheduler.stop()
-            except:
+            except Exception:
                 pass
             try:
                 if ear_mouth:
                     ear_mouth.close()
-            except:
+            except Exception:
                 pass
             try:
                 if wake_word:
                     wake_word.close()
-            except:
+            except Exception:
                 pass
         
         console.print("[info]再见。[/info]")
@@ -458,7 +464,7 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
                 console.print(f"[info]已恢复上次会话 ({len(messages)} 条消息)[/info]")
             else:
                 messages: list[BaseMessage] = []
-        except:
+        except Exception:
             messages: list[BaseMessage] = []
         
         if args.text:
@@ -505,6 +511,7 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
                         messages=messages,
                         thread_config=thread_config,
                         role=current_role,
+                        interaction_mode="text",
                         auto_approve_safe=True,
                         confirm_func=text_confirm_dangerous_tools if not args.no_safety else None,
                     )
@@ -618,6 +625,7 @@ async def run_main_loop(args, ear_mouth, wake_word, scheduler):
                         messages=messages,
                         thread_config=thread_config,
                         role=current_role,
+                        interaction_mode="voice",
                         auto_approve_safe=True,
                         confirm_func=voice_confirm if not args.no_safety else None,
                     )

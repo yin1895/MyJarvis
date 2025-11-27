@@ -20,11 +20,14 @@ from typing import Optional, Any, cast
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 
+from config import Config
+
 logger = logging.getLogger(__name__)
 
 # ============== Constants ==============
 
-BROWSER_TASK_TIMEOUT = 120  # seconds
+# 使用 Config 中的统一配置
+BROWSER_TASK_TIMEOUT = Config.BROWSER_TASK_TIMEOUT
 
 
 # ============== Input Schema ==============
@@ -46,24 +49,64 @@ class BrowserNavigateInput(BaseModel):
 
 class LLMWrapper:
     """
-    LLM 包装类，为 browser-use 库添加 provider 属性兼容性。
-    browser-use 内部会访问 llm.provider 来区分不同模型类型，
-    但标准 LangChain ChatOpenAI 对象没有此属性。
+    LLM 包装类，为 browser-use 库添加兼容性。
+    
+    browser-use 库会：
+    1. 访问 llm.provider 来区分不同模型类型
+    2. 访问 llm.model 来获取模型名称（用于 token 统计）
+    3. 动态设置 ainvoke 等属性来追踪 token 使用量
+    
+    这个包装器拦截这些操作，避免 Pydantic 模型报错。
+    
+    注意：LangChain 不同 Provider 的模型名称属性不一致：
+    - ChatOpenAI: model_name
+    - ChatGoogleGenerativeAI: model
+    - ChatAnthropic: model
+    本包装器统一提供 model 和 model_name 两个属性。
     """
-    def __init__(self, llm: Any, provider: str = "openai"):
+    def __init__(self, llm: Any, provider: str = "openai", model_name: Optional[str] = None):
+        # 使用 object.__setattr__ 避免触发自定义 __setattr__
         object.__setattr__(self, '_llm', llm)
-        object.__setattr__(self, 'provider', provider)
+        
+        # 从底层 LLM 提取模型名称（兼容不同 Provider）
+        if model_name is None:
+            model_name = (
+                getattr(llm, 'model_name', None) or 
+                getattr(llm, 'model', None) or 
+                'unknown'
+            )
+        
+        # 预设 browser-use 库可能访问的所有属性
+        object.__setattr__(self, '_extra_attrs', {
+            'provider': provider,
+            'model': model_name,       # browser-use 期望的属性
+            'model_name': model_name,  # 保持两个属性一致
+        })
     
     def __getattr__(self, name: str) -> Any:
+        # 优先从额外属性中获取
+        extra = object.__getattribute__(self, '_extra_attrs')
+        if name in extra:
+            return extra[name]
+        
+        # 否则从底层 LLM 获取
         _llm = object.__getattribute__(self, '_llm')
+        
+        # 防御性处理：model 属性特殊处理（避免 AttributeError）
+        if name == 'model':
+            return (
+                getattr(_llm, 'model_name', None) or 
+                getattr(_llm, 'model', None) or 
+                'unknown'
+            )
+        
         return getattr(_llm, name)
     
     def __setattr__(self, name: str, value: Any) -> None:
-        if name == 'provider':
-            object.__setattr__(self, name, value)
-        else:
-            _llm = object.__getattribute__(self, '_llm')
-            setattr(_llm, name, value)
+        # 所有动态设置的属性都存储在 _extra_attrs 中
+        # 不尝试设置到底层 Pydantic LLM 对象上
+        extra = object.__getattribute__(self, '_extra_attrs')
+        extra[name] = value
 
 
 # ============== Helper Functions ==============
@@ -89,11 +132,11 @@ def _get_browser_llm():
     """
     try:
         # Lazy import to avoid circular dependency
-        from core.llm_provider import LLMFactory
+        from core.llm_provider import LLMFactory, get_model_name
         llm = LLMFactory.create("default")
-        model_name = getattr(llm, "model_name", "") or getattr(llm, "model", "unknown")
-        provider = _get_provider_name(str(model_name))
-        return LLMWrapper(llm, provider=provider)
+        model_name = get_model_name(llm)
+        provider = _get_provider_name(model_name)
+        return LLMWrapper(llm, provider=provider, model_name=model_name)
     except Exception as e:
         raise RuntimeError(f"无法初始化 LLM: {e}")
 
@@ -141,21 +184,49 @@ async def _run_browser_task(task: str, timeout: int = BROWSER_TASK_TIMEOUT) -> s
         return f"浏览器自动化失败: {e}"
 
 
+async def _run_async(task: str) -> str:
+    """
+    Run browser task asynchronously.
+    This is the preferred entry point when called from an async context.
+    """
+    return await _run_browser_task(task)
+
+
 def _run_sync(task: str) -> str:
     """
     Run browser task synchronously (wraps async).
+    Handles both cases: running inside an existing event loop or standalone.
     """
     try:
         # Check if we're already in an event loop
         try:
             loop = asyncio.get_running_loop()
-            # If we're in a running loop, create a new task
-            # This shouldn't normally happen for our use case
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, _run_browser_task(task))
-                return future.result()
         except RuntimeError:
+            loop = None
+        
+        if loop is not None and loop.is_running():
+            # We're inside a running event loop (e.g., called from LangGraph async node)
+            # Use nest_asyncio if available, otherwise run in a separate thread
+            try:
+                import nest_asyncio
+                nest_asyncio.apply()
+                return asyncio.run(_run_browser_task(task))
+            except ImportError:
+                # Fallback: run in a separate thread to avoid blocking
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    # Create a new event loop in the thread
+                    def run_in_new_loop():
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            return new_loop.run_until_complete(_run_browser_task(task))
+                        finally:
+                            new_loop.close()
+                    
+                    future = pool.submit(run_in_new_loop)
+                    return future.result(timeout=BROWSER_TASK_TIMEOUT + 10)
+        else:
             # No running loop, safe to use asyncio.run
             return asyncio.run(_run_browser_task(task))
     except Exception as e:

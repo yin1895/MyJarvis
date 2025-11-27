@@ -15,7 +15,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
 from core.graph.state import AgentState, NodeOutput
@@ -24,6 +24,7 @@ from config import Config
 
 # Import tools from centralized registry (single source of truth)
 from tools import get_native_tools, get_tool_risk_level
+from tools.role import ROLE_SWITCH_MARKER
 
 logger = logging.getLogger(__name__)
 
@@ -107,35 +108,76 @@ def check_tool_calls_safety(tool_calls: Sequence[Union[dict, Any]]) -> tuple[boo
 
 # ============== System Prompt ==============
 
-def get_system_prompt() -> str:
+def get_system_prompt(mode: str = "text", role: str = "default") -> str:
     """
-    Get the system prompt from config with tool instructions.
+    Generate dynamic system prompt based on interaction mode and role.
     
-    Combines user's personality prompt with tool usage instructions.
+    根据交互模式（语音/文字）和当前角色动态生成 system prompt，
+    确保语音模式下输出简洁、文字模式下可以详细。
+    
+    Args:
+        mode: "voice" 或 "text"，影响输出风格约束
+        role: LLM 角色，如 "default", "smart", "coder", "vision", "fast"
+        
+    Returns:
+        完整的 system prompt 字符串
     """
-    personality = getattr(Config, 'PERSONALITY_PROMPT', '')
+    personality = Config.PERSONALITY
+    base = personality.get("base", {})
+    voice_cfg = personality.get("voice_mode", {})
+    text_cfg = personality.get("text_mode", {})
+    role_traits = personality.get("roles", {})
     
+    # 基础人格
+    name = base.get("name", "Jarvis")
+    trait = base.get("trait", "简洁、专业、友好")
+    language = base.get("language", "中文")
+    
+    prompt_parts = [
+        f"你是 {name}，一个智能 AI 助手。",
+        f"你的特点：{trait}",
+        f"使用{language}与用户交流。",
+    ]
+    
+    # 角色特定人格
+    if role in role_traits:
+        prompt_parts.append(f"\n【当前角色模式】{role}: {role_traits[role]}")
+    
+    # 交互模式约束（核心差异点）
+    if mode == "voice":
+        style = voice_cfg.get("style", "极度简洁，1-2句话")
+        rules = voice_cfg.get("rules", [])
+        prompt_parts.append(f"\n【语音模式 - 极其重要】\n风格要求：{style}")
+        if rules:
+            prompt_parts.append("必须遵守的规则：")
+            for rule in rules:
+                prompt_parts.append(f"- {rule}")
+        # 正反例对比
+        bad = voice_cfg.get("example_bad")
+        good = voice_cfg.get("example_good")
+        if bad and good:
+            prompt_parts.append(f"\n❌ 不要这样回答：\"{bad}\"")
+            prompt_parts.append(f"✅ 要这样回答：\"{good}\"")
+    else:
+        # 文字模式
+        style = text_cfg.get("style", "清晰准确，可以适当详细")
+        rules = text_cfg.get("rules", [])
+        prompt_parts.append(f"\n【文字模式】\n风格：{style}")
+        if rules:
+            for rule in rules:
+                prompt_parts.append(f"- {rule}")
+    
+    # 工具说明
     tool_instructions = """
-你可以使用以下工具来帮助用户：
+【可用工具】
+安全工具（自动执行）：system_control, memory_operation, knowledge_query, vision_analyze, switch_role
+危险工具（需确认）：file_operation, shell_execute, python_interpreter, browser_navigate, knowledge_ingest
 
-【安全工具 - 自动执行】
-- system_control: 系统控制（音量、亮度、媒体、打开应用）
-- memory_operation: 记忆管理（记住用户偏好、添加备忘、查询档案）
-- knowledge_query: 知识库查询（RAG 检索已学习的文档）
-- vision_analyze: 视觉分析（截取屏幕并分析内容）
-- switch_role: 切换 AI 模式（default/smart/coder/fast/vision）
-
-【危险工具 - 需要用户确认】
-- file_operation: 文件操作（读取、写入、列目录、删除）
-- shell_execute: 执行 Shell 命令
-- python_interpreter: 执行 Python 代码
-- browser_navigate: 浏览器自动化
-- knowledge_ingest: 学习文件到知识库
-
-请根据用户的需求选择合适的工具。如果不需要工具，直接回答即可。
-"""
+根据用户需求选择合适的工具，不需要工具时直接回答。"""
     
-    return personality + "\n" + tool_instructions
+    prompt_parts.append(tool_instructions)
+    
+    return "\n".join(prompt_parts)
 
 
 # Legacy constant for backward compatibility
@@ -144,6 +186,124 @@ DEFAULT_SYSTEM_PROMPT = get_system_prompt()
 
 # ============== Graph Nodes ==============
 
+async def state_updater_node(state: AgentState) -> NodeOutput:
+    """
+    Post-tool node that checks for role switch markers in tool results.
+    
+    This node runs after tools execute and before returning to chatbot.
+    It detects ROLE_SWITCH_MARKER in ToolMessage content and updates
+    the current_role in state accordingly.
+    
+    Args:
+        state: Current agent state
+        
+    Returns:
+        Updated state with new current_role if switch detected
+    """
+    messages = state.get("messages", [])
+    current_role = state.get("current_role", "default")
+    
+    # Check recent messages for role switch marker
+    # Only look at last few messages to avoid old matches
+    for msg in reversed(messages[-5:]):
+        # Check if this is a ToolMessage from switch_role
+        msg_name = getattr(msg, 'name', '')
+        if msg_name == 'switch_role':
+            content = str(getattr(msg, 'content', ''))
+            if ROLE_SWITCH_MARKER in content:
+                # Extract new role from marker
+                for line in content.split('\n'):
+                    if line.startswith(ROLE_SWITCH_MARKER):
+                        new_role = line.split(':')[1].strip()
+                        if new_role and new_role != current_role:
+                            logger.info(f"Role switch detected: {current_role} -> {new_role}")
+                            return {"current_role": new_role}
+                break
+    
+    # No role switch detected
+    return {}
+
+
+def _sanitize_messages_for_gemini(messages: List[BaseMessage]) -> List[BaseMessage]:
+    """
+    清理消息历史以符合 Gemini API 的严格要求。
+    
+    Gemini API 对消息序列有特殊要求：
+    1. function call (AIMessage with tool_calls) 后必须紧跟 function response (ToolMessage)
+    2. 不能有连续的 AI 消息（除非是 tool response 后）
+    3. 消息序列必须以 user message 或 function response 开始（相对于上一个 AI turn）
+    
+    此函数通过以下策略确保兼容性：
+    - 移除孤立的 tool_calls（没有对应 ToolMessage 的 AIMessage.tool_calls）
+    - 确保 tool_calls 和 ToolMessage 配对完整
+    
+    Args:
+        messages: 原始消息列表
+        
+    Returns:
+        清理后的消息列表，符合 Gemini API 要求
+    """
+    if not messages:
+        return messages
+    
+    sanitized = []
+    i = 0
+    
+    while i < len(messages):
+        msg = messages[i]
+        
+        # 检查是否是带有 tool_calls 的 AIMessage
+        if isinstance(msg, AIMessage) and getattr(msg, 'tool_calls', None):
+            tool_calls = msg.tool_calls
+            tool_call_ids = {tc.get('id') or tc.id for tc in tool_calls if hasattr(tc, 'id') or isinstance(tc, dict)}
+            
+            # 查找后续的 ToolMessage，确保所有 tool_calls 都有对应的响应
+            j = i + 1
+            found_tool_messages = []
+            found_ids = set()
+            
+            while j < len(messages):
+                next_msg = messages[j]
+                if isinstance(next_msg, ToolMessage):
+                    tool_call_id = getattr(next_msg, 'tool_call_id', None)
+                    if tool_call_id in tool_call_ids:
+                        found_tool_messages.append(next_msg)
+                        found_ids.add(tool_call_id)
+                        j += 1
+                        continue
+                # 遇到非 ToolMessage 或不匹配的 ToolMessage，停止搜索
+                break
+            
+            # 检查是否所有 tool_calls 都有对应的 ToolMessage
+            if found_ids == tool_call_ids and len(found_ids) > 0:
+                # 完整的 tool call 序列，保留
+                sanitized.append(msg)
+                sanitized.extend(found_tool_messages)
+                i = j
+            else:
+                # 不完整的 tool call 序列
+                # 创建一个没有 tool_calls 的新 AIMessage，只保留 content
+                if msg.content:
+                    # 保留文本内容，移除 tool_calls
+                    clean_msg = AIMessage(content=msg.content)
+                    sanitized.append(clean_msg)
+                    logger.debug(f"Sanitized incomplete tool_calls from AIMessage")
+                # 跳过孤立的 ToolMessage
+                i = j if j > i + 1 else i + 1
+        else:
+            # 普通消息，直接保留
+            sanitized.append(msg)
+            i += 1
+    
+    # 最后检查：确保不以 ToolMessage 结尾（除非后面紧跟 AI 响应）
+    # Gemini 要求最后一条消息必须是 user 或 AI（非 tool_calls）
+    while sanitized and isinstance(sanitized[-1], ToolMessage):
+        logger.debug("Removing trailing ToolMessage for Gemini compatibility")
+        sanitized.pop()
+    
+    return sanitized
+
+
 async def chatbot_node(state: AgentState) -> NodeOutput:
     """
     Main chatbot node that processes user messages and generates responses.
@@ -151,9 +311,10 @@ async def chatbot_node(state: AgentState) -> NodeOutput:
     This node:
     1. Gets the current LLM based on the role in state
     2. Binds all available tools to the LLM
-    3. Prepends a system message if not present
-    4. Invokes the LLM with the message history
-    5. Returns the response (may contain tool calls)
+    3. Prepends a system message based on interaction_mode and role
+    4. Truncates message history to avoid context overflow
+    5. Invokes the LLM with the message history
+    6. Returns the response (may contain tool calls)
     
     Args:
         state: The current agent state containing messages and metadata
@@ -163,6 +324,7 @@ async def chatbot_node(state: AgentState) -> NodeOutput:
     """
     messages = state.get("messages", [])
     role_str = state.get("current_role") or "default"
+    mode = state.get("interaction_mode") or "text"  # 默认文字模式
     role = cast(RoleType, role_str)
     
     # Get the LLM for the current role
@@ -172,17 +334,43 @@ async def chatbot_node(state: AgentState) -> NodeOutput:
     tools = get_all_tools()
     llm_with_tools = llm.bind_tools(tools)
     
-    # Prepare messages with system prompt if not present
-    if not messages or not isinstance(messages[0], SystemMessage):
-        system_prompt = get_system_prompt()
-        messages_to_send = [SystemMessage(content=system_prompt)] + list(messages)
-    else:
-        messages_to_send = list(messages)
+    # Generate dynamic system prompt based on mode and role
+    system_prompt = get_system_prompt(mode=mode, role=role_str)
     
-    logger.debug(f"Invoking LLM with {len(messages_to_send)} messages and {len(tools)} tools")
+    # Filter out old system messages to avoid confusion
+    filtered_messages = [m for m in messages if not isinstance(m, SystemMessage)]
     
-    # Invoke the LLM asynchronously
-    response: AIMessage = await llm_with_tools.ainvoke(messages_to_send)
+    # 🔧 消息截断：避免 context 超出限制
+    # 保留最近的 N 条消息（可通过 Config 配置）
+    MAX_HISTORY_MESSAGES = getattr(Config, 'MAX_HISTORY_MESSAGES', 30)
+    if len(filtered_messages) > MAX_HISTORY_MESSAGES:
+        # 保留最近的消息，确保最后一条是用户消息
+        filtered_messages = filtered_messages[-MAX_HISTORY_MESSAGES:]
+        logger.info(f"Truncated message history to {MAX_HISTORY_MESSAGES} messages")
+    
+    # 🔧 Gemini 兼容性处理：清理不完整的 tool_calls 序列
+    # Gemini API 要求：function call 后必须紧跟 function response
+    # 如果历史消息中有孤立的 tool_calls（没有对应的 ToolMessage），会导致错误
+    if role_str in ("vision", "smart") or "gemini" in str(getattr(llm, 'model', '')).lower():
+        filtered_messages = _sanitize_messages_for_gemini(filtered_messages)
+    
+    messages_to_send = [SystemMessage(content=system_prompt)] + filtered_messages
+    
+    logger.debug(f"Invoking LLM with {len(messages_to_send)} messages, mode={mode}, role={role_str}")
+    
+    # Invoke the LLM asynchronously with error handling
+    try:
+        response: AIMessage = await llm_with_tools.ainvoke(messages_to_send)
+    except Exception as e:
+        logger.error(f"LLM invocation failed: {e}")
+        # 返回错误消息而不是崩溃
+        error_msg = f"抱歉，AI 模型调用失败：{str(e)[:100]}"
+        return {"messages": [AIMessage(content=error_msg)]}
+    
+    # 检查空响应
+    if not response.content and not response.tool_calls:
+        logger.warning("LLM returned empty response")
+        return {"messages": [AIMessage(content="抱歉，我没有收到有效的响应。请重试或检查网络连接。")]}
     
     logger.debug(f"LLM response: {str(response.content)[:100]}...")
     
@@ -237,6 +425,9 @@ def create_graph(
     tool_node = ToolNode(tools=tools)
     workflow.add_node("tools", tool_node)
     
+    # Add state updater node (runs after tools, updates role if needed)
+    workflow.add_node("state_updater", state_updater_node)
+    
     # Define the graph edges
     # START -> chatbot
     workflow.add_edge(START, "chatbot")
@@ -248,8 +439,9 @@ def create_graph(
         tools_condition,
     )
     
-    # tools -> chatbot (loop back after tool execution)
-    workflow.add_edge("tools", "chatbot")
+    # tools -> state_updater -> chatbot (loop back after tool execution)
+    workflow.add_edge("tools", "state_updater")
+    workflow.add_edge("state_updater", "chatbot")
     
     # Compile options
     compile_kwargs: dict[str, Any] = {}

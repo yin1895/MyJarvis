@@ -94,6 +94,7 @@ def analyze_image_with_llm(base64_image: str, query: str) -> str:
     Analyze an image using the vision LLM.
     
     Uses LangChain's ChatGoogleGenerativeAI or ChatOpenAI with multi-modal messages.
+    Respects voice mode constraints for concise responses.
     
     Args:
         base64_image: Base64-encoded image string
@@ -103,24 +104,39 @@ def analyze_image_with_llm(base64_image: str, query: str) -> str:
         LLM's analysis response text
     """
     from core.llm_provider import LLMFactory
+    from langchain_core.messages import SystemMessage
     
     try:
         # Get vision-capable LLM
         llm = LLMFactory.create("vision")
         
-        # Construct multi-modal message (compatible with both OpenAI and Gemini)
-        message = HumanMessage(
-            content=[
-                {"type": "text", "text": f"这是用户屏幕截图。用户指令：{query}\n请直接分析并回答，保持简洁。"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                }
-            ]
+        # System prompt: 强制简洁（因为这个结果会被朗读或转述）
+        system_prompt = (
+            "你是一个视觉分析助手。直接描述你看到的内容，不要废话。"
+            "规则："
+            "1-2句话概括重点，不要长篇大论；"
+            "不要说'我看到'这种开头，直接说内容；"
+            "不要过度分析或推测用户意图；"
+            "不要反问用户。"
+            "示例回答：'VS Code 打开了 main.py，正在调试 Python 程序。'"
         )
         
+        # Construct multi-modal message (compatible with both OpenAI and Gemini)
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": query},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                    }
+                ]
+            )
+        ]
+        
         # Invoke LLM
-        response = llm.invoke([message])
+        response = llm.invoke(messages)
         
         # Extract text content
         if hasattr(response, 'content'):
